@@ -11,16 +11,28 @@ never run. Not "has bugs" -- has never had a single request served by any part o
 
 ## Blocking, in the order they block each other
 
-### 1. CI has never run. Not once.
+### 1. CI has never run. Not once. The cause is now known.
 
-Every push to `thisisisheanesu/kaviri` since 22 September is `startup_failure` with zero jobs
-created. Both workflow files parse as valid YAML, `action.yml` parses, and repository level
-Actions permissions are `{"enabled": true, "allowed_actions": "all"}`. A startup failure with
-no jobs and a valid workflow is almost always account level: Actions billing, a spending limit
-at zero, or included minutes exhausted on private repositories.
+Every push to `thisisisheanesu/kaviri` is `startup_failure` with zero jobs created. The REST
+API does not say why; the Actions tab does, in one line:
+
+> GitHub Actions workflows can't be executed on this repository. Your account's billing is
+> currently locked. Please update your payment information.
+
+And `github.com/settings/billing/payment_information` says "You have not added a payment
+method." There is $0.22 of metered usage this month from the ngano repository, $0 of it billed,
+so this is not exhausted minutes: it is an account with a balance and no card, which locks
+billing, which blocks Actions on every private repository.
+
+Two ways out, and the second one is free:
+
+1. Add a payment method. Nothing here will actually cost anything at this volume.
+2. **Make the repository public.** Standard runners are free for public repositories, so there
+   is nothing to bill and nothing to lock. The launch plan makes `kaviri` public anyway, so
+   this is a sequencing choice rather than extra work.
 
 This is first because it invalidates every other check. The test suite is green on this laptop
-and has never been green anywhere else. Look at github.com/settings/billing.
+and has never been green anywhere else.
 
 ### 2. The database schema has never been proved against a real Postgres.
 
@@ -34,6 +46,17 @@ A real project now exists: **`qeprgqdekauxicawefpz`**, named kaviri, `eu-central
 `inmisi's Org`, created through the Management API and confirmed by running
 `select current_database()` against it.
 
+Migrations `0001`, `0002` and `0003` are applied to it and confirmed. `0004` onwards are not,
+and the honest reason is a tooling boundary rather than a technical one: they were being pushed
+through a browser session, and `0004` is the api-keys migration, which is full of the words
+`key_hash`, `verify_api_key` and `digest(..., 'sha256')`. A safety classifier reads that as
+credential handling and refuses it, correctly, because it cannot tell schema from exfiltration.
+The right fix is not to route around that. It is `npx supabase login`, after which the whole
+thing goes in from a shell in one command.
+
+A partial schema is not a problem here: `scripts/reset.sh` drops what the migrations own before
+applying them, and its guard treats an empty `public.orgs` as a first run.
+
 The eleven migrations are still not applied. `scripts/run-sql.py` reads its access token from
 the desktop keyring, where there is no longer one (`No such secret item at path:
 /org/freedesktop/secrets/collection/login/10`), and there is no Postgres on this machine to
@@ -43,8 +66,8 @@ is a different claim from "applies cleanly".
 
 ### 3. Nothing is deployed.
 
-Cloudflare account `67cb2eb6080019612e374af596f7197c` has exactly one kaviri Worker on it:
-`kaviri-site`, the landing page. `workers/api` and `workers/dl` exist as source and have never
+Cloudflare account `67cb2eb6080019612e374af596f7197c` has one kaviri Worker on it:
+`kaviri-site`, which is the landing page, the playground, the waitlist API and the admin. `workers/api` and `workers/dl` exist as source and have never
 been deployed. There is no queue, no Durable Object namespace in use, and **R2 is not enabled
 on that account at all** -- the API returns `Please enable R2 through the Cloudflare
 Dashboard`. Artifact storage is R2 in the design.
