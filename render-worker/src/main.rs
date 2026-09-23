@@ -90,17 +90,34 @@ async fn run(doctor: bool) -> Result<(), String> {
     // job itself has long since been reaped and re-run somewhere else.
     sweep_work_root(&cfg).await;
 
+    let unhealthy = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let runner = Arc::new(job::Runner {
         cfg: Arc::clone(&cfg),
         control: Arc::clone(&control),
         storage: Arc::clone(&storage),
         backend: Arc::clone(&backend),
+        unhealthy: Arc::clone(&unhealthy),
     });
 
     let slots = Arc::new(Semaphore::new(cfg.max_concurrent_jobs));
     let mut shutdown = shutdown_signal();
+    let mut gave_up = false;
 
     loop {
+        // A box that has abandoned a container stops taking work. It has already shown it
+        // cannot end a container, so the next take would be leased onto the same wedged
+        // daemon with a runaway container still holding the disk, and it would very likely
+        // be abandoned too. Draining and exiting hands every job in flight back cleanly and
+        // lets systemd restart the process, and the restart re runs preflight, which is
+        // where a daemon in this state is diagnosed rather than merely suffered.
+        if unhealthy.load(std::sync::atomic::Ordering::Relaxed) {
+            tracing::error!(
+                "a render container could not be stopped on this box; leasing no further jobs"
+            );
+            gave_up = true;
+            break;
+        }
+
         // Acquired before the lease, not after. Leasing a job this box has no slot for
         // would hold a customer's take hostage for the length of another take, and the
         // queue cannot tell the difference between that and a dead worker.
@@ -152,6 +169,16 @@ async fn run(doctor: bool) -> Result<(), String> {
     // costs us the render seconds twice.
     tracing::info!("shutting down; waiting for jobs in flight to finish");
     let _ = slots.acquire_many(cfg.max_concurrent_jobs as u32).await;
+    if gave_up {
+        // A non zero exit, so systemd restarts the worker rather than recording a clean
+        // stop, and so an operator reading `systemctl status` sees a failure rather than a
+        // process that decided to end.
+        return Err(
+            "stopped after abandoning a render container; the container may still be running \
+             and this box needs a human before it films anything else"
+                .into(),
+        );
+    }
     tracing::info!("stopped");
     Ok(())
 }
@@ -179,7 +206,7 @@ fn shutdown_signal() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> +
 /// Shelling out to `df` rather than taking a libc dependency for one `statvfs`. The worker
 /// already spawns processes for every take, so this is not a new capability, and one fewer
 /// crate on the box that runs customer scripts is worth a fork per startup.
-fn free_bytes(path: &std::path::Path) -> Result<u64, String> {
+pub(crate) fn free_bytes(path: &std::path::Path) -> Result<u64, String> {
     let out = std::process::Command::new("df")
         .arg("-PB1")
         .arg(path)

@@ -121,85 +121,113 @@ function corsPreflight(requestId: string): Response {
 }
 
 export default {
+  /**
+   * The outermost catch, and the only reason this wrapper exists.
+   *
+   * `handle` below already catches what it expects to go wrong. This catches what it does
+   * not. A Worker that lets an exception escape is answered by the Cloudflare runtime with
+   * an HTML error page carrying a 1101, and a customer whose embedded video broke, or a
+   * script parsing this endpoint, gets markup where the error envelope should be. The api
+   * Worker has had this guarantee since it was written; this one serves the only public
+   * unauthenticated surface in the system and had it only for the part of the request after
+   * the signature verified.
+   */
   async fetch(request: Request, env: Env, ctx: Ctx): Promise<Response> {
-    const requestId = requestIdFor(request);
-    const url = new URL(request.url);
-
-    if (request.method === "OPTIONS") return corsPreflight(requestId);
-
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      const response = errorResponse(
-        405,
-        "method_not_allowed",
-        "this host serves artifacts and accepts GET, HEAD and OPTIONS only",
-        requestId,
-      );
-      response.headers.set("Allow", "GET, HEAD, OPTIONS");
-      return response;
-    }
-
-    // Unauthenticated on purpose, and it touches neither the bucket nor a secret, so it
-    // answers even when the signing key is missing. That is what makes it useful during a
-    // deploy that got the secrets wrong.
-    if (url.pathname === "/" || url.pathname === "/healthz") {
-      const headers = baseHeaders(requestId);
-      headers.set("Content-Type", "application/json; charset=utf-8");
-      headers.set("Cache-Control", "no-store");
-      return new Response(JSON.stringify({ ok: true, service: "kaviri-dl" }), { status: 200, headers });
-    }
-
-    if (!env.DL_SIGNING_KEY) {
-      // Refusing loudly beats verifying against an empty secret, which would accept a
-      // signature anybody could compute.
-      console.log(JSON.stringify({ at: "dl", event: "misconfigured", request_id: requestId }));
-      return errorResponse(500, "internal", "artifact delivery is not configured", requestId);
-    }
-
-    const now = Math.floor(Date.now() / 1000);
-    const verified = await verifySignedPath(
-      url.pathname,
-      [env.DL_SIGNING_KEY, env.DL_SIGNING_KEY_PREVIOUS ?? ""],
-      now,
-    );
-
-    if (!verified.ok) {
-      if (verified.reason === "expired") {
-        return errorResponse(
-          403,
-          "link_expired",
-          "this download link has expired; request a fresh one from the job's artifact endpoint",
-          requestId,
-        );
-      }
-      // Every other failure is one status and one code. The expiry is the only thing
-      // kept separate, and only once the signature has already been proved good, so a
-      // caller cannot use the difference between "wrong" and "too late" to learn whether
-      // a key they guessed at exists. The reason in detail is about the shape of the URL
-      // rather than about the object, which is what makes it safe to hand back and useful
-      // in a support conversation.
-      return errorResponse(403, "link_invalid", "this download link is not valid", requestId, {
-        reason: verified.reason,
-      });
-    }
-
-    const { key, expiresAt } = verified;
-
     try {
-      return await serve(request, env, ctx, { key, expiresAt, now, requestId, host: url.host });
+      return await handle(request, env, ctx);
     } catch (error) {
+      const requestId = request.headers.get("cf-ray") ?? "unknown";
       console.log(
         JSON.stringify({
           at: "dl",
-          event: "error",
+          event: "unhandled",
           request_id: requestId,
-          key,
           message: error instanceof Error ? error.message : String(error),
         }),
       );
-      return errorResponse(500, "internal", "the artifact could not be read", requestId);
+      return errorResponse(500, "internal", "the request could not be handled", requestId);
     }
   },
 };
+
+async function handle(request: Request, env: Env, ctx: Ctx): Promise<Response> {
+  const requestId = requestIdFor(request);
+  const url = new URL(request.url);
+
+  if (request.method === "OPTIONS") return corsPreflight(requestId);
+
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    const response = errorResponse(
+      405,
+      "method_not_allowed",
+      "this host serves artifacts and accepts GET, HEAD and OPTIONS only",
+      requestId,
+    );
+    response.headers.set("Allow", "GET, HEAD, OPTIONS");
+    return response;
+  }
+
+  // Unauthenticated on purpose, and it touches neither the bucket nor a secret, so it
+  // answers even when the signing key is missing. That is what makes it useful during a
+  // deploy that got the secrets wrong.
+  if (url.pathname === "/" || url.pathname === "/healthz") {
+    const headers = baseHeaders(requestId);
+    headers.set("Content-Type", "application/json; charset=utf-8");
+    headers.set("Cache-Control", "no-store");
+    return new Response(JSON.stringify({ ok: true, service: "kaviri-dl" }), { status: 200, headers });
+  }
+
+  if (!env.DL_SIGNING_KEY) {
+    // Refusing loudly beats verifying against an empty secret, which would accept a
+    // signature anybody could compute.
+    console.log(JSON.stringify({ at: "dl", event: "misconfigured", request_id: requestId }));
+    return errorResponse(500, "internal", "artifact delivery is not configured", requestId);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const verified = await verifySignedPath(
+    url.pathname,
+    [env.DL_SIGNING_KEY, env.DL_SIGNING_KEY_PREVIOUS ?? ""],
+    now,
+  );
+
+  if (!verified.ok) {
+    if (verified.reason === "expired") {
+      return errorResponse(
+        403,
+        "link_expired",
+        "this download link has expired; request a fresh one from the job's artifact endpoint",
+        requestId,
+      );
+    }
+    // Every other failure is one status and one code. The expiry is the only thing
+    // kept separate, and only once the signature has already been proved good, so a
+    // caller cannot use the difference between "wrong" and "too late" to learn whether
+    // a key they guessed at exists. The reason in detail is about the shape of the URL
+    // rather than about the object, which is what makes it safe to hand back and useful
+    // in a support conversation.
+    return errorResponse(403, "link_invalid", "this download link is not valid", requestId, {
+      reason: verified.reason,
+    });
+  }
+
+  const { key, expiresAt } = verified;
+
+  try {
+    return await serve(request, env, ctx, { key, expiresAt, now, requestId, host: url.host });
+  } catch (error) {
+    console.log(
+      JSON.stringify({
+        at: "dl",
+        event: "error",
+        request_id: requestId,
+        key,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    return errorResponse(500, "internal", "the artifact could not be read", requestId);
+  }
+}
 
 interface ServeContext {
   key: string;

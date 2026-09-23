@@ -29,6 +29,12 @@ export interface Env {
   SERVICE_VERSION: string;
   RATE_SUBMIT_PER_MIN: string;
   RATE_POLL_PER_MIN: string;
+  /**
+   * The share of a bucket, as a percentage, that one isolate will hand out on its own when
+   * the rate limiting Durable Object cannot be reached. See the long comment at the top of
+   * ratelimit.ts for why that number is neither zero nor a hundred.
+   */
+  RATE_DEGRADED_PERCENT: string;
   MAX_BODY_BYTES: string;
   MAX_SOURCE_BYTES: string;
   KEY_CACHE_TTL_SECONDS: string;

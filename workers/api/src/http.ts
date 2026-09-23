@@ -75,7 +75,7 @@ const BASE_HEADERS: Record<string, string> = {
   // fails looks to it exactly like the service being down.
   "access-control-allow-origin": "*",
   "access-control-expose-headers":
-    "X-Kaviri-Request-Id, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After, Location",
+    "X-Kaviri-Request-Id, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-RateLimit-Mode, Retry-After, Location",
   // A proxy that guesses at the content type of a JSON error is a proxy that can turn it
   // into something a client will not parse.
   "x-content-type-options": "nosniff",

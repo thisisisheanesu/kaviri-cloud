@@ -8,7 +8,11 @@
 #   1. Nothing references a `billing` schema or a `billing_` object.
 #   2. No identifier in the schema is about money.
 #   3. org_entitlements holds limits only.
-#   4. The private repository is not a dependency of this one.
+#   4. The private repository is not a dependency of this one, in any manifest or lock
+#      file that git tracks.
+#   5. No migration writes a key about money into the extra_limits jsonb column. The keys
+#      that arrive at runtime are checked by scripts/verify-seam.sh and by
+#      supabase/tests/seam_none.sql, because a jsonb key exists only in data.
 #
 # Comments and documentation are deliberately exempt. Explaining WHY the seam exists
 # requires writing the words "billing" and "price", and a check that forbade the words
@@ -111,16 +115,65 @@ fi
 if git ls-files | grep -qE '(^|/)kaviri-billing(/|$)'; then
   note 'the private billing repository is vendored into this one'
 fi
-for manifest in package.json Cargo.toml deno.json; do
-  [ -f "$manifest" ] || continue
-  if grep -qEi 'kaviri[-_]billing' "$manifest"; then
-    note "$manifest depends on the private billing repository"
-  fi
-done
+# This used to read a fixed list of three manifests at the repository root. None of them
+# exists: the real manifests are workers/api/package.json, workers/dl/package.json and
+# render-worker/Cargo.toml, and the loop skipped every name it was given, so adding a
+# dependency on the private repository to a Worker passed the seam check. It is the same
+# glob-matched-nothing failure the comment above warns about, which is why this is now
+# asked of git rather than assumed, and why the count is asserted rather than trusted.
+#
+# Lock files are included because a dependency reaches the build through the lock whatever
+# the manifest says, and a lock entry left behind after a manifest edit is exactly the
+# residue worth catching.
+manifests=()
+mapfile -t manifests < <(
+  git ls-files \
+    'package.json' '*/package.json' \
+    'package-lock.json' '*/package-lock.json' \
+    'Cargo.toml' '*/Cargo.toml' \
+    'Cargo.lock' '*/Cargo.lock' \
+    'deno.json' '*/deno.json' \
+    'deno.jsonc' '*/deno.jsonc' \
+    'deno.lock' '*/deno.lock' 2>/dev/null || true
+)
+
+if [ "${#manifests[@]}" -eq 0 ]; then
+  note 'no dependency manifests matched; the dependency half of the seam check is not checking anything'
+else
+  for manifest in "${manifests[@]}"; do
+    if grep -qEi 'kaviri[-_]billing' "$manifest"; then
+      note "$manifest depends on the private billing repository"
+    fi
+  done
+fi
+
+# 5. extra_limits is jsonb, so its keys are data rather than schema and no column-name
+# check can see them. The runtime half of this guard lives in scripts/verify-seam.sh and
+# supabase/tests/seam_none.sql, which read the keys out of the applied database. What can
+# be checked here is the only place this repository itself puts keys into that column: a
+# literal in a migration.
+#
+# The comment is stripped and the string literal is kept, which is the opposite of the
+# sweep above and is deliberate: here the string literal IS the thing being inspected,
+# because a jsonb key can only ever arrive as one, while a comment that explains why
+# seat_price_cents is forbidden must stay allowed to name it.
+ent_literals="$(
+  awk '/extra_limits/ {
+         line = $0
+         sub(/--.*/, "", line)
+         if (line ~ /extra_limits/) printf "%s:%d:%s\n", FILENAME, FNR, line
+       }' supabase/migrations/*.sql
+)"
+money_key='(^|_|")(price|amount|cost|currency|invoice|stripe|coupon|discount|subscription|mrr|arr|cents|tax_rate|payment|charge)($|_|")'
+if hits="$(printf '%s\n' "$ent_literals" | grep -Ei "$money_key" || true)"; [ -n "$hits" ]; then
+  note 'a migration writes a key about money into extra_limits:'
+  printf '%s\n' "$hits" | sed 's/^/  /' >&2
+fi
 
 if [ "$fail" -ne 0 ]; then
   printf 'seam: FAILED. See README.md, "The seam".\n' >&2
   exit 1
 fi
 
-printf 'seam: ok, %d files checked\n' "${#code_files[@]}"
+printf 'seam: ok, %d code files and %d dependency manifests checked\n' \
+  "${#code_files[@]}" "${#manifests[@]}"

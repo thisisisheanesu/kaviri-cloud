@@ -266,6 +266,12 @@ create policy render_jobs_select_member on public.render_jobs
   for select
   using ((select app.is_org_member(org_id)));
 
+-- This policy exists for public.submit_job and for nothing else. The table is FORCE ROW
+-- LEVEL SECURITY, which means RLS applies to the table owner too, and submit_job is
+-- SECURITY DEFINER so its insert runs as the owner. Without a permissive insert policy
+-- that insert would be refused and no job could ever be submitted. It is not what fences
+-- clients out: the INSERT privilege below is, because a policy can only narrow rows a role
+-- is already allowed to insert, and no client role is allowed to insert at all.
 create policy render_jobs_insert_member on public.render_jobs
   for insert
   with check ((select app.is_org_member(org_id)));
@@ -278,7 +284,22 @@ create policy render_jobs_update_member on public.render_jobs
   with check ((select app.is_org_member(org_id)));
 
 grant select on public.render_jobs to authenticated, kaviri_api;
-grant insert on public.render_jobs to authenticated, kaviri_api;
+
+-- No INSERT grant to any client role, deliberately. Every job is born through
+-- public.submit_job, which is the only place the entitlement fence and the usage ledger
+-- exist: the max_script_ops check, the monthly jobs, render seconds and stored bytes
+-- checks, the idempotency resolution and the app.record_usage call all live there.
+--
+-- While INSERT was granted, none of that was mandatory. PostgREST is a public endpoint and
+-- the anon key is public by design, so any signed-in user could POST a row straight to
+-- /rest/v1/render_jobs. The row was born queued, satisfied the birth trigger, and
+-- lease_next_job then rendered it like any other, off the books and against no limit. An
+-- entitlement check that a caller can decline to make is not a limit, it is a suggestion.
+--
+-- submit_job is SECURITY DEFINER, so its insert runs as the table owner and is unaffected
+-- by this. kaviri_worker was never granted insert and moves state through the worker
+-- functions instead, so the fleet is unaffected too.
+revoke insert on public.render_jobs from authenticated, kaviri_api;
 -- Deliberately narrow. State is moved by the three worker functions and by the
 -- maintenance functions, never by a client, so a customer cannot mark their own job done
 -- and a leaked key cannot rewrite history.

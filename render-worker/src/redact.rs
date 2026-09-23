@@ -89,6 +89,30 @@ pub fn selector_for_log(sel: &str) -> String {
     }
 }
 
+/// A short string that came from the customer, on its way into a log line, an error message
+/// or a job row.
+///
+/// This is for the values that are structurally customer controlled but are not supposed to
+/// be long: an op name, an op kind echoed back by the recorder, a rejection reason built
+/// around one of them. Nothing here is treated as a secret, because none of these fields
+/// carries one, but all of them are attacker sized: a script may name its op
+/// `"a".repeat(2_000_000)` and the rejection that quotes it then travels through the log
+/// stream, the job row and every dashboard that reads it. Control characters go too, since a
+/// newline in a value is how one log line becomes two and a forged second line is how a log
+/// reader is lied to.
+pub fn token_for_log(raw: &str, max_chars: usize) -> String {
+    let flat: String = raw
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let n = flat.chars().count();
+    if n <= max_chars {
+        return flat;
+    }
+    let head: String = flat.chars().take(max_chars).collect();
+    format!("{head}... [{n} chars total]")
+}
+
 /// A whole script, summarised. Used once per job at info level, because knowing a take was
 /// 31 ops of which 9 were navigations is the difference between reading a timeout as
 /// normal and reading it as broken.
@@ -175,6 +199,31 @@ mod tests {
         assert!(!line.contains("secret"));
         assert!(line.contains("timed out"));
         assert!(line.contains("x.test"));
+    }
+
+    #[test]
+    fn an_attacker_sized_op_name_is_bounded_before_it_reaches_a_log_line() {
+        // A script may name its op anything at all, and the rejection that quotes it is
+        // logged and stored. The bound is the point; the prefix is kept because an operator
+        // reading "unknown op: scrol..." can still see the typo.
+        let huge = "scroll".repeat(50_000);
+        let logged = token_for_log(&huge, 40);
+        assert_eq!(
+            logged.chars().count(),
+            40 + "... [300000 chars total]".len()
+        );
+        assert!(logged.starts_with("scrollscroll"));
+        assert!(logged.contains("300000 chars total"));
+        // Short values pass through untouched, so ordinary errors stay readable.
+        assert_eq!(token_for_log("wiggle", 40), "wiggle");
+    }
+
+    #[test]
+    fn a_newline_in_a_customer_value_cannot_forge_a_second_log_line() {
+        let forged = "click\n{\"level\":\"info\",\"msg\":\"all clear\"}";
+        let logged = token_for_log(forged, 200);
+        assert!(!logged.contains('\n'));
+        assert!(logged.starts_with("click "));
     }
 
     #[test]

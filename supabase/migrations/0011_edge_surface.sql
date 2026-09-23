@@ -18,10 +18,23 @@
 -- wrappers in public cost nothing and keep the rest of app unreachable, so the edge sets
 -- APP_RPC_SCHEMA=public and PostgREST's exposed schema list stays as it is.
 
+-- Declared volatile, not stable, because app.verify_api_key writes: it advances
+-- last_used_at whenever that column is null or older than five minutes (0004:190-192).
+-- PostgREST runs an immutable or stable function inside a read-only transaction, so a
+-- stable declaration here would raise 25006 on the first resolve of any key that has gone
+-- stale, which is every key on its first ever use. The volatility of a wrapper has to
+-- match what it actually does, not what one wishes it did.
+--
+-- The alternative, keeping this stable and moving the last_used_at write out of the read
+-- path, is the better long-run shape for a per-request function and is written up in
+-- docs/API.md. It is not done here because the five minute staleness gate already reduces
+-- the write to at most one per key per five minutes, so the hot-path cost being avoided is
+-- small, while an asynchronous toucher is a new moving part that nothing in this
+-- deployment currently exists to run.
 create or replace function public.verify_api_key(p_presented text)
 returns table (key_id uuid, org_id uuid)
 language sql
-stable
+volatile
 security definer
 set search_path = public, pg_catalog
 as $$
@@ -42,7 +55,12 @@ returns table (
   plan_code text,
   max_concurrent_renders integer,
   max_jobs_per_month integer,
-  max_render_seconds_per_month integer,
+  -- bigint, not integer, because app.effective_entitlements declares this column bigint and
+  -- it is fed by the bigint table column in 0003. A LANGUAGE sql function has its result
+  -- type validated at CREATE time, and bigint is not binary coercible to integer, so
+  -- declaring integer here does not merely narrow the value: it makes this whole migration
+  -- fail to apply, which takes public.verify_api_key below down with it.
+  max_render_seconds_per_month bigint,
   max_stored_bytes bigint,
   max_job_seconds integer,
   max_script_ops integer,

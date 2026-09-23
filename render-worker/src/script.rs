@@ -8,8 +8,13 @@
 //! forgets to call the edge validator, the thing standing between a script and the
 //! metadata endpoint should not be a Worker in another repository.
 
+use crate::redact;
 use serde_json::Value;
 use std::net::{IpAddr, Ipv4Addr};
+
+/// How much of an unrecognised op name is quoted back. Long enough that an operator reading
+/// the rejection can see the typo, short enough that the name cannot itself be the payload.
+const OP_NAME_IN_ERROR: usize = 40;
 
 /// Ops the service supplies itself. A script that names them is accepted by the API and
 /// dropped here: the recorder starts a take when the first op runs and renders when the
@@ -49,9 +54,17 @@ pub fn prepare(script: &[Value]) -> Result<Prepared, Rejection> {
             continue;
         }
         if !ALLOWED_OPS.contains(&kind) {
+            // The op name is quoted back because a typo is the overwhelmingly common cause
+            // and "unknown op" with no name is unactionable. It is bounded first because
+            // the name is a customer supplied string of unbounded length that travels from
+            // here into the worker's log, the job row and the API response, and none of
+            // those three is a place where an arbitrary megabyte belongs.
             return Err(Rejection {
                 op_index: i,
-                reason: format!("unknown op: {kind}"),
+                reason: format!(
+                    "unknown op: {}",
+                    redact::token_for_log(kind, OP_NAME_IN_ERROR)
+                ),
             });
         }
         if kind == "navigate" {
@@ -293,6 +306,24 @@ mod tests {
             json!({"op": "stop_recording"}),
         ];
         assert!(prepare(&script).is_err());
+    }
+
+    #[test]
+    fn an_unknown_op_is_named_in_the_rejection_but_cannot_be_the_payload() {
+        let huge: String = "z".repeat(1_000_000);
+        let script = vec![json!({"op": huge})];
+        match prepare(&script) {
+            Err(err) => {
+                assert!(err.reason.starts_with("unknown op: zzz"));
+                assert!(
+                    err.reason.chars().count() < 200,
+                    "a megabyte of customer text reached the rejection: {} chars",
+                    err.reason.chars().count()
+                );
+                assert!(err.reason.contains("1000000 chars total"));
+            }
+            Ok(_) => panic!("an op named by a megabyte of z must be refused"),
+        }
     }
 
     #[test]

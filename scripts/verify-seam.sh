@@ -16,8 +16,10 @@
 #   1. No schema named for billing exists.
 #   2. No table, view, column, function, type or enum label in the open schemas is about
 #      money.
-#   3. org_entitlements is the ONLY table the billing service may write, and every one of
-#      its columns is a limit.
+#   3. org_entitlements is the ONLY table the billing service may write, every one of its
+#      columns is a limit, and every key inside its extra_limits jsonb is a limit too.
+#      The jsonb half matters because it is the one part of the write surface that a
+#      column-name check cannot see.
 #   4. v_org_usage_month is the ONLY usage surface it may read, and it exposes quantities
 #      and no money.
 #   5. The open service really does run unmetered with no billing service present: a fresh
@@ -58,6 +60,12 @@ do $$
 declare
   bad text;
   n bigint;
+  -- One word list, used for column names and for jsonb keys alike. It is declared once
+  -- rather than written out twice because the two checks are the same question asked of
+  -- schema and of data, and a word added to one and forgotten in the other would leave
+  -- exactly the gap the jsonb check exists to close.
+  money_word constant text :=
+    '(^|_)(price|amount|cost|currency|invoice|stripe|coupon|discount|subscription|mrr|arr|cents|tax_rate|payment|charge)($|_)';
 begin
   -- 1. A schema named for billing.
   select string_agg(nspname, ', ') into bad
@@ -82,7 +90,7 @@ begin
   select string_agg(format('%I.%I.%I', table_schema, table_name, column_name), ', ') into bad
     from information_schema.columns
    where table_schema in ('public', 'app')
-     and column_name ~* '(^|_)(price|amount|currency|invoice|stripe|coupon|discount|subscription|mrr|arr|cents|tax_rate|payment|charge)($|_)';
+     and column_name ~* money_word;
   if bad is not null then
     raise exception 'columns about money exist in the open database: %', bad;
   end if;
@@ -129,6 +137,33 @@ begin
     raise exception 'org_entitlements has column(s) that are not limits: %', bad;
   end if;
 
+  -- extra_limits is the hole in every check above, and it is worth naming plainly. It is
+  -- jsonb, so its contents are data and not schema, and the column allowlist passes it by
+  -- name no matter what is inside. A key written by the billing service such as
+  -- seat_price_cents would sit in the open database and satisfy the column check here,
+  -- the DDL check in scripts/check-seam.sh and the assertion in seam_none.sql, all three.
+  -- So the keys themselves are read out and held to the same word list as the columns.
+  --
+  -- The jsonpath is '$.**' rather than jsonb_object_keys so that the walk reaches every
+  -- depth. A nested {"seats": {"price_cents": 1200}} is the same breach as a top level
+  -- one, and a guard that only reads the first level would be an invitation to nest. The
+  -- document itself is unioned in beside its descendants so that a top level key is
+  -- covered by the plain reading of the query rather than by a property of '$.**' that a
+  -- reader would have to go and look up.
+  select string_agg(distinct format('%s in org %s', k, e.org_id::text), ', ') into bad
+    from public.org_entitlements e
+    cross join lateral (
+      select e.extra_limits as v
+      union all
+      select jsonb_path_query(e.extra_limits, '$.**')
+    ) d
+    cross join lateral jsonb_object_keys(
+      case when jsonb_typeof(d.v) = 'object' then d.v else '{}'::jsonb end) as k
+   where k ~* money_word;
+  if bad is not null then
+    raise exception 'org_entitlements.extra_limits holds key(s) about money: %', bad;
+  end if;
+
   -- 4. The read surface.
   if to_regclass('public.v_org_usage_month') is null then
     raise exception 'v_org_usage_month is missing; the billing read surface does not exist';
@@ -153,6 +188,12 @@ $$;
 -- 5. The claim the README makes, tested rather than asserted: with no billing service
 -- anywhere near this database, a brand new org is unmetered. Rolled back, so running the
 -- check leaves nothing behind and it can be pointed at any environment.
+--
+-- What is being tested is the database, not an environment variable. Nothing in this
+-- repository reads BILLING_MODE; the unmetered result comes from create_org seeding a row
+-- whose limit columns are all null and from app.effective_entitlements treating null as
+-- unlimited. So this section proves what a deployment with no billing service gets, and
+-- it would fail, correctly, against a database where something had written real limits.
 begin;
 
 insert into auth.users (id, email)
@@ -175,11 +216,11 @@ begin
   assert e.plan_code = 'unmetered',
     'a fresh org should be unmetered with no billing service, got ' || e.plan_code;
   assert e.max_jobs_per_month is null,
-    'BILLING_MODE=none must not impose a monthly job limit';
+    'an org with no billing service must have no monthly job limit';
   assert e.max_render_seconds_per_month is null,
-    'BILLING_MODE=none must not impose a monthly seconds limit';
+    'an org with no billing service must have no monthly seconds limit';
   assert e.max_stored_bytes is null,
-    'BILLING_MODE=none must not impose a storage limit';
+    'an org with no billing service must have no storage limit';
 
   -- The ceilings are the machine's limits and not a plan's, so they survive.
   assert e.max_job_seconds = 1800, 'the platform job ceiling should still apply';

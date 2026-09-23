@@ -29,9 +29,17 @@ pub struct Control {
 /// `LeaseLost` is separated from the rest because it is the one failure the job loop must
 /// not retry and must not report: the job already belongs to somebody else, and anything
 /// this worker says about it from here on is a lie about a take it no longer owns.
+///
+/// `Abandoned` is not a queue error at all, and it lives here anyway because this enum is
+/// the channel by which a job ends without an outcome being reported. It means the reverse
+/// of `LeaseLost`: this worker still holds the lease and has decided it must not use it,
+/// because a container it could not kill may still be filming the take. The two share the
+/// one property that matters at the call site, which is that saying nothing and letting the
+/// lease lapse is the correct ending.
 #[derive(Debug)]
 pub enum ControlError {
     LeaseLost(String),
+    Abandoned(String),
     Rejected { code: String, message: String },
     Transport(String),
 }
@@ -40,6 +48,7 @@ impl std::fmt::Display for ControlError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ControlError::LeaseLost(m) => write!(f, "lease lost: {m}"),
+            ControlError::Abandoned(m) => write!(f, "job abandoned: {m}"),
             ControlError::Rejected { code, message } => {
                 write!(f, "queue rejected the call ({code}): {message}")
             }

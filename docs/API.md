@@ -87,9 +87,10 @@ omitted, not null, when there is not.
 
 `402` for a limit is deliberate, and it is the one place the open service touches the
 subject of money at all: it reports that a limit was hit and names it. It never quotes a
-price, an amount owed or an upgrade cost. Under `BILLING_MODE=none` no tenant limit is
-ever set, so `402` can still occur only from a platform ceiling, and then
-`detail.limit` is `max_job_seconds`, `max_script_ops` or `max_concurrent_renders`.
+price, an amount owed or an upgrade cost. A tenant limit exists only where something
+wrote one into `org_entitlements`, so on a deployment with no billing service every tenant
+limit is unset and a `402` can only come from a platform ceiling, with `detail.limit`
+being `max_job_seconds`, `max_script_ops` or `max_concurrent_renders`.
 
 ## Rate limits
 
@@ -131,7 +132,7 @@ Submit a take. Returns immediately; the render happens on the fleet.
     "out_height": null
   },
   "source": {
-    "repository": "vamboai/kaviri",
+    "repository": "thisisisheanesu/kaviri",
     "ref": "refs/pull/412/merge",
     "sha": "9f1c2ae",
     "run_id": "11224455"
@@ -424,9 +425,17 @@ money: this service does not know what anything costs.
 }
 ```
 
-A `null` limit means unlimited. Under `BILLING_MODE=none` every tenant limit is `null`
-and only the platform ceilings have values, which is exactly what the self-hosted and
-clean-checkout deployments show.
+A `null` limit means unlimited, and a tenant limit is `null` until something writes one
+into `org_entitlements`. On a deployment with no billing service nothing ever does, so
+every tenant limit stays `null` and only the platform ceilings have values, which is what
+the self-hosted and clean-checkout deployments show.
+
+`BILLING_MODE` is worth being precise about, because it is easy to read it as a switch and
+it is not one. No code in this repository reads it: it names which deployment you are
+looking at, and the unmetered behaviour comes from the database, where the absence of a
+written limit is the absence of a limit. Setting `BILLING_MODE=none` against a database
+whose `org_entitlements` rows already carry limits would not lift them. If you need a
+tenant unmetered, clear the limits on its row.
 
 ---
 

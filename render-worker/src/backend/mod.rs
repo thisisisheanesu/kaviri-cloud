@@ -46,6 +46,11 @@ pub struct RenderRequest {
     /// How long the render pass gets after that before the process is killed outright.
     pub render_grace: Duration,
     pub max_spool_bytes: u64,
+    /// The largest artifact this worker will upload. The spool watchdog needs it because it
+    /// measures the whole job directory, and the finished MP4 lands in that directory
+    /// beside the spool. Without this term the watchdog would count a legitimate video
+    /// against the frame spool's headroom and stop takes that were inside every limit.
+    pub max_artifact_bytes: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -79,6 +84,15 @@ pub struct RenderOutcome {
     pub truncated: bool,
     /// The process had to be killed, which means there is probably no usable video.
     pub killed: bool,
+    /// The backend gave up on stopping the container and stopped waiting for it.
+    ///
+    /// This is not a failed take, it is a failed box. The container may still be running a
+    /// customer's script with the job directory bind mounted into it, and this worker has
+    /// no way left to end it. Nothing downstream may report an outcome for a job in this
+    /// state, because the take is still, as far as anyone here knows, in progress: the job
+    /// has to reach another box through the lease lapsing, which is the one mechanism that
+    /// does not depend on this box being able to do anything.
+    pub abandoned: bool,
     pub cancelled: bool,
     /// The spool watchdog stopped the take.
     pub spool_limit: bool,

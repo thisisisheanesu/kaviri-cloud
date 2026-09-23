@@ -2,8 +2,14 @@
 --
 -- Applied to a clean Postgres with the shim and every migration and nothing else: no
 -- billing schema, no private repository, no entitlement row written by anybody but
--- create_org. If this passes, BILLING_MODE=none is a working deployment rather than a
--- claim in a README.
+-- create_org. If this passes, a deployment with no billing service is a working
+-- deployment rather than a claim in a README.
+--
+-- Note what is and is not being proved. Nothing in this repository reads BILLING_MODE, so
+-- the unmetered result below is not produced by a setting: it is produced by create_org
+-- seeding a row whose limit columns are all null, and by app.effective_entitlements
+-- treating a null limit as unlimited. Pointed at a database where something had written
+-- real limits, these same assertions would fail, and that is correct.
 --
 -- It also exercises the isolation guarantee and the job lifecycle, because those are the
 -- two things that would be most expensive to discover broken in production.
@@ -417,9 +423,38 @@ $$;
 -- The seam, stated as an assertion rather than as prose
 -- ---------------------------------------------------------------------------
 
+-- Every key held in org_entitlements.extra_limits, at every depth. This is a view rather
+-- than a query repeated inline because the assertions below run it four times: once on
+-- the real rows, twice against planted keys, and once after the plant is removed.
+--
+-- The jsonpath is '$.**' rather than jsonb_object_keys so the walk reaches nested objects
+-- and arrays. A key buried one level down is the same breach as a key at the top, and a
+-- guard that read only the first level would be an instruction on where to hide.
+-- The document itself is unioned in beside its descendants rather than relied on to come
+-- back from '$.**', so that a top level key is covered by the plain reading of the query
+-- and not by a property of the jsonpath operator that a reader would have to go and look
+-- up. The duplicate root that this produces is harmless, since every caller takes distinct.
+create temporary view seam_extra_limit_keys as
+  select e.org_id, k
+    from public.org_entitlements e
+    cross join lateral (
+      select e.extra_limits as v
+      union all
+      select jsonb_path_query(e.extra_limits, '$.**')
+    ) d
+    cross join lateral jsonb_object_keys(
+      case when jsonb_typeof(d.v) = 'object' then d.v else '{}'::jsonb end) as k;
+
 do $$
 declare
   n integer;
+  bad text;
+  v_alpha uuid := (select id from public.orgs where slug = 'alpha');
+  -- One word list for the column names and for the jsonb keys. The two checks are the
+  -- same question asked of schema and of data, and a word added to one and forgotten in
+  -- the other would reopen the gap the jsonb check exists to close.
+  money_word constant text :=
+    '(^|_)(price|amount|cost|currency|invoice|stripe|coupon|discount|subscription|mrr|arr|cents|tax_rate|payment|charge)($|_)';
 begin
   select count(*) into n from information_schema.schemata where schema_name = 'billing';
   assert n = 0, 'the open migrations created a billing schema';
@@ -428,8 +463,57 @@ begin
     from information_schema.columns
    where table_schema = 'public'
      and table_name = 'org_entitlements'
-     and column_name ~ '(price|amount|cost|currency|invoice|stripe|coupon|discount|subscription)';
+     and column_name ~* money_word;
   assert n = 0, 'org_entitlements grew a column about money';
+
+  -- extra_limits is jsonb, so its contents are data and not schema, and every guard in
+  -- this repository that checks column NAMES passes it by whatever is inside it. A key
+  -- such as seat_price_cents written by the billing service would land in the open
+  -- database and satisfy the column assertion above, the DDL check in check-seam.sh and
+  -- the catalogue check in verify-seam.sh, all three. So the keys are read out and held
+  -- to the same word list as the columns.
+  select string_agg(distinct k, ', ') into bad
+    from seam_extra_limit_keys where k ~* money_word;
+  assert bad is null,
+    'org_entitlements.extra_limits holds key(s) about money: ' || coalesce(bad, '');
+
+  -- The negative control. A guard nobody has watched fail has not been shown to guard
+  -- anything, so the breach is committed here on purpose and the guard is required to
+  -- name it. The plant is rolled back with the rest of this file.
+  update public.org_entitlements
+     set extra_limits = extra_limits || '{"seat_price_cents": 1200}'::jsonb
+   where org_id = v_alpha;
+  get diagnostics n = row_count;
+  -- org_entitlements is FORCE RLS with no update policy, so this write needs a role that
+  -- bypasses RLS. If it wrote nothing then the control proved nothing, and saying so is
+  -- better than the silent pass that a missing plant would otherwise produce.
+  assert n = 1,
+    'the planted key was not written, so the extra_limits control proves nothing; run this file as a role that bypasses row level security';
+
+  select string_agg(distinct k, ', ') into bad
+    from seam_extra_limit_keys where k ~* money_word;
+  assert bad = 'seat_price_cents',
+    'the extra_limits guard missed a planted top level money key, got ' || coalesce(bad, '<nothing>');
+
+  -- The same key one level down, because nesting is the obvious way around a guard that
+  -- reads only the top level.
+  update public.org_entitlements
+     set extra_limits = '{"seats": {"price_cents": 1200}}'::jsonb
+   where org_id = v_alpha;
+
+  select string_agg(distinct k, ', ') into bad
+    from seam_extra_limit_keys where k ~* money_word;
+  assert bad = 'price_cents',
+    'the extra_limits guard missed a planted nested money key, got ' || coalesce(bad, '<nothing>');
+
+  -- Put it back, and confirm the guard goes quiet again. A check that reports a breach
+  -- whatever the data says is not a check either.
+  update public.org_entitlements set extra_limits = '{}'::jsonb where org_id = v_alpha;
+
+  select string_agg(distinct k, ', ') into bad
+    from seam_extra_limit_keys where k ~* money_word;
+  assert bad is null,
+    'the extra_limits guard still reports a key after the plant was removed: ' || coalesce(bad, '');
 
   -- Every tenant table has RLS on. A new table added without it would be readable by
   -- every other tenant, and this is the assertion that catches it on the day it lands.

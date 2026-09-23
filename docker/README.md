@@ -7,8 +7,13 @@ about what it is not allowed to do.
 ```sh
 ./docker/resolve-pins.sh > docker/pins.env   # once, and commit the result
 ./docker/build.sh                            # build kaviri-render:local
-sudo ./docker/egress.sh                      # once per box, creates the network and the fence
+sudo ./docker/egress.sh                      # network, fence, boot time unit, and a proof
+sudo ./docker/egress.sh --verify             # re-check an existing fence, change nothing
 ```
+
+`egress.sh` ends by running a container on the render network and trying to connect to the
+addresses it just blocked. If they answer, it exits non zero. A provisioning run that
+succeeds has therefore demonstrated the fence rather than described it.
 
 The worker never builds or pulls the image. `kaviri-render-worker doctor` fails if it is
 not already present, because a box that silently pulls a newer image is a box that changed
@@ -153,8 +158,40 @@ The network is IPv4 only. Not because IPv6 is a problem, but because a second ad
 family is a second complete set of rules and a box that forgets the second set has the
 fence it thinks it has in one family only.
 
-The rules are not persistent across a reboot on their own. Either install
-`iptables-persistent` or run `egress.sh` from a unit ordered before the worker.
+**Layer three, the worker refusing to start.** The two layers above are configuration, and
+configuration has a lifetime. A docker network is daemon state and comes back after a
+reboot; the iptables rules are kernel state and do not. That asymmetry is the dangerous
+one, because a rebooted box inspects entirely clean: the network is there, the worker's old
+startup check passed, and the only thing missing is the boundary.
+
+So `egress.sh` installs `kaviri-egress.service`, which re-runs it at every boot, and the
+worker's preflight no longer asks whether the network exists. It runs one container on that
+network and tries to connect:
+
+| target | required answer |
+|---|---|
+| `169.254.169.254:80` | refused |
+| `10.255.255.1:80` | refused |
+| `KAVIRI_EGRESS_PROBE_PUBLIC`, `1.1.1.1:443` by default | connected |
+
+If any of those comes out differently, the worker exits with an explanation instead of
+leasing a job. Four things about that table are deliberate:
+
+- **Two blocked addresses, not one.** A fence installed for the famous CIDR and not the
+  rest is a realistic half configured box, and a probe that only tries 169.254.169.254
+  cannot tell it from a correct one.
+- **A connection timing out is a failure, not a pass.** `egress.sh` uses `REJECT`, so a
+  fenced address answers in milliseconds. Silence means some other filter, and the worker
+  does not rely on a boundary it did not install.
+- **The positive control is what makes the refusals mean anything.** A render network with
+  no route anywhere refuses 169.254.169.254 exactly as convincingly as a fenced one. Set
+  `KAVIRI_EGRESS_PROBE_PUBLIC=off` on a box with no general egress and the worker starts,
+  and says at WARN that the fence is now unverified.
+- **No override for the blocked half.** There is no environment variable that makes the
+  worker film on an unfenced network, because the only reason to want one is to do the
+  thing this check exists to prevent.
+
+`sudo docker/egress.sh --verify` runs the same probe by hand and changes nothing.
 
 There is a third layer worth building later and not built now: an explicit HTTP proxy the
 container is forced through, which would let a take be allowlisted to the domains its
@@ -165,13 +202,19 @@ a launch needs.
 
 - The recorder is passed `--max-spool-bytes` (8 GiB by default) and stops the take cleanly
   when it is reached, rendering what it has.
-- The worker runs its own spool watchdog every five seconds over the mounted spool
-  directory and stops the container at 125% of that cap. It exists because the recorder's
-  cap covers the frame spool and not the CFR intermediate, which is written under the same
-  `TMPDIR` during the render pass, so a take can be inside the recorder's limit and outside
-  ours.
-- The worker refuses to start at all if the work root has less than `KAVIRI_MIN_FREE_BYTES`
-  free, 16 GiB by default.
+- The worker runs its own watchdog every five seconds over **the whole job directory**, and
+  stops the container above `max_spool_bytes * 1.25 + max_artifact_bytes`. Three terms
+  because there are three writers: the frame spool, the CFR intermediate that lands under
+  the same `TMPDIR` and is not counted against the recorder's cap, and `take.mp4` itself,
+  which is written into `/work` and which a watchdog pointed at `/spool` cannot see at all.
+  The artifact term is added rather than folded into the 25% so that a legitimate two
+  gigabyte video does not eat the intermediate's headroom.
+- The worker refuses to start if the work root has less than `KAVIRI_MIN_FREE_BYTES` free,
+  16 GiB by default, **and checks again before every take**. The startup check answers "was
+  this box ever ready", which a process that lives for weeks stops being able to answer
+  honestly: a take spools at 15 to 25 MB per second and an abandoned container or a
+  co-tenant can eat the disk between two jobs. A take handed back before its container
+  starts costs a requeue; one that fills the disk mid render costs the next few jobs too.
 
 ### The clock
 

@@ -37,6 +37,14 @@ pub struct Config {
     pub docker_network: String,
     pub container_memory: String,
     pub container_cpus: String,
+    /// `host:port` the startup egress probe must be able to reach, or None when the check
+    /// is deliberately turned off.
+    ///
+    /// This is the positive control, and it exists because the negative one is not
+    /// self validating: a box whose render network has no route anywhere at all refuses
+    /// 169.254.169.254 exactly as convincingly as a correctly fenced box does. Requiring
+    /// one ordinary address to answer is what makes "refused" mean "the fence refused it".
+    pub egress_probe_public: Option<String>,
 
     // Safety envelope. Every one of these is a ceiling the worker applies on top of
     // whatever the queue hands it, so a mistake in an entitlement cannot make one box
@@ -94,6 +102,16 @@ impl Config {
             docker_network: opt("KAVIRI_DOCKER_NETWORK").unwrap_or_else(|| "kaviri-egress".into()),
             container_memory: opt("KAVIRI_CONTAINER_MEMORY").unwrap_or_else(|| "4g".into()),
             container_cpus: opt("KAVIRI_CONTAINER_CPUS").unwrap_or_else(|| "3".into()),
+            // An IP literal by default rather than a name, because a DNS failure inside the
+            // probe container would otherwise look exactly like a blocked address and the
+            // control would pass for the wrong reason. `off` is accepted for a box with no
+            // general internet egress, and the worker says loudly at startup that the
+            // positive control is not running.
+            egress_probe_public: match opt("KAVIRI_EGRESS_PROBE_PUBLIC").as_deref() {
+                Some("off") => None,
+                Some(target) => Some(target.to_string()),
+                None => Some("1.1.1.1:443".into()),
+            },
 
             max_spool_bytes: num("KAVIRI_MAX_SPOOL_BYTES", 8 * GIB, 256 * MIB, 512 * GIB)?,
             // The platform ceiling in app.platform_ceilings() is 1800 seconds. The worker

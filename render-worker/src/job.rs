@@ -30,6 +30,15 @@ pub struct Runner {
     pub control: Arc<Control>,
     pub storage: Arc<Storage>,
     pub backend: Arc<dyn RenderBackend>,
+    /// Set when this box has been shown to be broken in a way that outlives the job that
+    /// discovered it, which today means a container it could not kill.
+    ///
+    /// The lease loop reads it and stops taking work. That matters because the alternative
+    /// is a box that has already proved it cannot end a container cheerfully leasing the
+    /// next customer's take onto the same wedged daemon, with a runaway container still
+    /// holding its disk. Exiting lets systemd restart the worker, and the restart re runs
+    /// preflight, which is where a daemon in that state is caught properly.
+    pub unhealthy: Arc<AtomicBool>,
 }
 
 impl Runner {
@@ -70,6 +79,15 @@ impl Runner {
             Err(ControlError::LeaseLost(m)) => {
                 tracing::warn!(job = %job_id, reason = %m, "lease lost; another box owns this job now")
             }
+            // Deliberately louder than a lost lease, which is routine. This one means a
+            // container is still running on this box with nothing left that can stop it,
+            // and the job was handed back by silence rather than by a report.
+            Err(ControlError::Abandoned(m)) => tracing::error!(
+                job = %job_id,
+                reason = %m,
+                "job abandoned; the lease will lapse and the reaper will requeue it. This box \
+                 has stopped taking work and needs a human."
+            ),
             Err(e) => tracing::error!(job = %job_id, error = %e, "could not report the outcome"),
         }
     }
@@ -122,6 +140,40 @@ impl Runner {
             shape = %redact::script_shape(&prepared.ops),
             "leased"
         );
+
+        // Checked here and not only at startup. The startup check answers "was this box
+        // ever ready", which a long lived worker stops being able to answer honestly within
+        // hours: a take spools at roughly 15 to 25 MB per second, an abandoned container or
+        // a co-tenant can eat the disk between two jobs, and the failure of filming into a
+        // full disk is not a clean one. It is a truncated MP4, a half written spool and
+        // usually the next two jobs as well. Handing the take back before the container
+        // starts costs the customer a requeue and costs this box nothing.
+        let work_root = self.cfg.work_root.clone();
+        let free = tokio::task::spawn_blocking(move || crate::free_bytes(&work_root))
+            .await
+            .unwrap_or_else(|e| Err(format!("the free space check panicked: {e}")));
+        match free {
+            Ok(free) if free < self.cfg.min_free_bytes => {
+                return self
+                    .fail_retryable(
+                        lease,
+                        "render_failed",
+                        &format!(
+                            "{} has {} MiB free and a take needs at least {} MiB",
+                            self.cfg.work_root.display(),
+                            free / (1024 * 1024),
+                            self.cfg.min_free_bytes / (1024 * 1024)
+                        ),
+                        started,
+                    )
+                    .await;
+            }
+            Ok(_) => {}
+            // Not knowing how much disk is left is not a reason to refuse a take. The
+            // watchdog still bounds what this job can write, so the worst case here is the
+            // behaviour we had before this check existed.
+            Err(e) => tracing::warn!(job = %job_id, error = %e, "could not measure free disk"),
+        }
 
         if let Err(e) = tokio::fs::create_dir_all(&spool).await {
             // A box that cannot make a directory is a broken box, not a broken take, so
@@ -198,9 +250,14 @@ impl Runner {
             soft_deadline: Duration::from_secs(budget),
             render_grace: self.cfg.render_grace,
             max_spool_bytes: self.cfg.max_spool_bytes,
+            max_artifact_bytes: self.cfg.max_artifact_bytes,
         };
 
         let outcome = self.backend.run(request, progress_tx, cancel_rx).await;
+        // Aborting the heartbeat here is what makes the abandonment path below work, and it
+        // is worth naming: stopping the beat is the worker's only way to hand a job back
+        // when it can no longer do anything about it, because the lease lapsing is the one
+        // recovery mechanism that does not require this box to function.
         heartbeat.abort();
 
         if lease_lost.load(Ordering::Relaxed) {
@@ -222,6 +279,20 @@ impl Runner {
                     .await
             }
         };
+
+        if outcome.abandoned {
+            // No complete_job, and the omission is the point. A container this worker could
+            // not kill may still be filming, still writing to the bind mount and still
+            // holding the box's CPU. Reporting `failed` would end a take that has not
+            // ended, and reporting anything at all would refresh the lease and keep the
+            // reaper away from the one job that needs it. Saying nothing lets the lease
+            // lapse, which requeues the take on a box that works.
+            self.unhealthy.store(true, Ordering::Relaxed);
+            return Err(ControlError::Abandoned(format!(
+                "the render container for this job could not be stopped on {}",
+                self.cfg.worker_id
+            )));
+        }
 
         // ---- what came out of it ----
 
@@ -373,7 +444,17 @@ impl Runner {
         detail: Option<Value>,
         started: Instant,
     ) -> Result<String, ControlError> {
-        tracing::warn!(job = %lease.job_id, code, "refusing the job: {message}");
+        // Bounded, because most rejection messages are static but not all of them: the
+        // script_invalid ones quote the customer's own op name, and the length of that is
+        // the customer's choice. The quoting is bounded at its source in script.rs too;
+        // this is the second bound, at the point where the string becomes a log line,
+        // because that is the site a future caller with a new message will reach for.
+        tracing::warn!(
+            job = %lease.job_id,
+            code,
+            "refusing the job: {}",
+            redact::token_for_log(message, 300)
+        );
         self.control
             .complete_job(
                 &lease.job_id,
@@ -655,6 +736,26 @@ mod tests {
             exit_code: Some(0),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn an_abandoned_container_is_never_read_as_a_finished_take() {
+        // What actually handles abandonment is the early return in run_inner, which reports
+        // nothing at all so the lease lapses. This test guards the fallback: if somebody
+        // deletes that return, the take must still not come out of the classifier as done,
+        // because the container that would be writing that video is the one this box could
+        // not stop.
+        let o = RenderOutcome {
+            abandoned: true,
+            killed: true,
+            exit_code: None,
+            ..Default::default()
+        };
+        assert_eq!(classify(&o, false, 1800).0, Some("job_timeout"));
+        assert!(
+            classify(&o, true, 1800).0.is_some(),
+            "a video on disk does not make an abandoned container a success"
+        );
     }
 
     #[test]

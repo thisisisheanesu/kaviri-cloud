@@ -64,6 +64,13 @@ APP_RPC_SCHEMA = "public"
 RATE_SUBMIT_PER_MIN = "60"
 RATE_POLL_PER_MIN = "600"
 
+# What one isolate will hand out by itself, as a percentage of the budgets above, while the
+# rate limiting Durable Object cannot be reached. It is not zero because a limiter that
+# refuses on error turns one Durable Object incident into a total API outage, and it is not
+# a hundred because that is the bypass this number was added to close. The reasoning, and
+# what the resulting guarantee actually is, are written out at the top of src/ratelimit.ts.
+RATE_DEGRADED_PERCENT = "20"
+
 # A generous script is a few hundred ops of a few hundred bytes. A megabyte is well past
 # that and still small enough that rejecting it costs nothing.
 MAX_BODY_BYTES = "1048576"

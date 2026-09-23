@@ -11,9 +11,15 @@
 [Unit]
 Description=kaviri render worker
 Documentation=https://github.com/vamboai/kaviri-cloud
-After=network-online.target docker.service
+After=network-online.target docker.service kaviri-egress.service
 Wants=network-online.target
 Requires=docker.service
+# The fence is kernel state and does not survive a reboot on its own, so the unit that
+# rebuilds it has to have run first. This ordering is a convenience and not the control:
+# the worker's own preflight runs a container on the render network and refuses to start
+# unless a connection to 169.254.169.254 is actually refused, so a box where this unit is
+# missing or failed does not film, it crash loops with an explanation.
+Wants=kaviri-egress.service
 
 [Service]
 Type=simple

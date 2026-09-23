@@ -61,13 +61,14 @@ Every variable, its default, and what it is for. Required ones have no default.
 | `KAVIRI_WORK_ROOT` | `/var/lib/kaviri/work` | job directories and frame spools |
 | `KAVIRI_RENDER_IMAGE` | `kaviri-render:local` | must already be present; the worker never pulls |
 | `KAVIRI_DOCKER_NETWORK` | `kaviri-egress` | created by `docker/egress.sh` |
+| `KAVIRI_EGRESS_PROBE_PUBLIC` | `1.1.1.1:443` | the positive control for the startup fence probe; `off` disables it |
 | `KAVIRI_CONTAINER_MEMORY` | `4g` | also the swap limit, so the container cannot swap |
 | `KAVIRI_CONTAINER_CPUS` | `3` | one for the browser, one for the capture pump, one for ffmpeg |
 | `KAVIRI_MAX_SPOOL_BYTES` | 8 GiB | passed to the recorder, and the basis of the watchdog |
 | `KAVIRI_JOB_SECONDS_CAP` | 1800 | the worker's own ceiling, applied over the lease's |
 | `KAVIRI_RENDER_GRACE_SECONDS` | 300 | time the render pass gets after a truncation |
-| `KAVIRI_MAX_ARTIFACT_BYTES` | 2 GiB | a larger take is not uploaded |
-| `KAVIRI_MIN_FREE_BYTES` | 16 GiB | refuse to start below this |
+| `KAVIRI_MAX_ARTIFACT_BYTES` | 2 GiB | a larger take is not uploaded, and part of the watchdog ceiling |
+| `KAVIRI_MIN_FREE_BYTES` | 16 GiB | refuse to start below this, and hand back any take leased below it |
 | `KAVIRI_LOG` | `info` | tracing filter |
 | `KAVIRI_LOG_FORMAT` | JSON | `text` for a human on the box |
 
@@ -88,8 +89,9 @@ platform ceiling, and clamps its own on top.
 | anything else with no video | `render_failed` | yes |
 | the upload failed | `upload_failed` | yes |
 | the customer cancelled | `cancelled`, no artifact | |
+| the container could not be killed | **nothing is reported** | by the reaper |
 
-Two rules behind that table.
+Three rules behind that table.
 
 **Truncation is a success.** A take that outran its budget is cut short and rendered, and
 the customer gets the first part of their demo rather than an error. The signal is the
@@ -98,6 +100,22 @@ final progress message, since a `done` job carries no error object.
 **A customer's fault is never retried.** A script that fails on op 7 fails on op 7 again,
 and retrying would charge them three times the render seconds for the same answer. A box's
 fault always is, because most of what goes wrong on a render box is transient.
+
+**The last row reports nothing on purpose.** At the wall clock the container is asked to
+stop, then killed, and the kill is retried three times thirty seconds apart. If it is still
+running after that, this worker has run out of ways to end it, and the container may still
+be filming into the bind mount. Saying `failed` would end a take that has not ended, and
+saying anything at all would renew the lease and keep the reaper away from the one job that
+needs it. So the worker stops the heartbeat, lets the lease lapse, logs at ERROR, marks
+itself unhealthy and exits non zero once the other takes in flight have drained. The reaper
+requeues the job on a box that works, and systemd restarts this one into a preflight that
+will diagnose the daemon properly.
+
+That is the difference a state machine makes. The previous version armed the hard kill on
+`stopping && !outcome.killed` and set `killed` before spawning it, so a single failed
+`docker kill` disabled the timer permanently: the loop then waited on `child.wait()` for as
+long as the worker lived while the heartbeat kept renewing the lease, and the job could
+never be reclaimed by anyone.
 
 A partial video is uploaded only when the attempt is the last word, which is when the
 failure is not retryable or the attempt count is spent. Attaching one to a job that is

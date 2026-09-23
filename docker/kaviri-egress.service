@@ -1,0 +1,45 @@
+# Reinstalls the render network's egress fence at every boot.
+#
+#   installed automatically by `sudo docker/egress.sh`
+#   or by hand: cp docker/egress.sh /usr/local/sbin/kaviri-egress.sh
+#               install to /etc/systemd/system/kaviri-egress.service
+#               systemctl enable kaviri-egress.service
+#
+# WHY A UNIT AND NOT iptables-persistent
+#
+# The docker network and the iptables rules that fence it have different lifetimes. The
+# network is daemon state and comes back on its own after a reboot; the rules are kernel
+# state and do not. A box provisioned correctly and rebooted months later therefore has a
+# render network that looks entirely normal and no fence at all, which is the worst shape a
+# missing control can take, because nothing about it looks wrong.
+#
+# iptables-persistent would restore a saved snapshot of the rules. This restores them by
+# running the script that defines them, which means the fence on a rebooted box is the fence
+# the current script installs rather than the one somebody saved on the day they set the box
+# up. There is exactly one definition of what is blocked, and it is in egress.sh.
+#
+# This unit is still not the real control. The real control is the worker's own startup
+# probe, which runs a container on this network and refuses to start unless the connection
+# to 169.254.169.254 is actually refused. This unit makes the fence come back; the probe is
+# what notices when it did not.
+
+[Unit]
+Description=kaviri render egress fence
+Documentation=https://github.com/vamboai/kaviri-cloud
+# The script creates a docker network and reads docker's own chains, so the daemon has to be
+# up first. Before= the worker rather than the worker merely wanting it, because the worker
+# starting first would fail its own egress probe and crash loop until this ran.
+After=docker.service
+Requires=docker.service
+Before=kaviri-render-worker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/kaviri-egress.sh
+# Re-running is safe by design: the rules live in a chain of their own which is flushed and
+# rebuilt, and the network is created only if it is missing.
+ExecReload=/usr/local/sbin/kaviri-egress.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -21,7 +21,7 @@ import { getHealth, getUsage } from "./routes/meta";
 
 export { TokenBucket } from "./do/token-bucket";
 
-interface Route {
+export interface Route {
   method: string;
   /** Path segments after /v1, with :id standing for one segment. */
   pattern: string[];
@@ -29,7 +29,12 @@ interface Route {
   handle: (rc: RequestContext, request: Request, params: Record<string, string>) => Promise<Response>;
 }
 
-const ROUTES: Route[] = [
+/**
+ * Exported so that test/always-json.test.ts can drive every endpoint rather than the
+ * handful somebody remembered to list. A route added here is a route that test covers on
+ * the same commit, which is the difference between a guarantee and a checklist.
+ */
+export const ROUTES: Route[] = [
   { method: "POST", pattern: ["jobs"], bucket: "submit", handle: (rc, request) => submitJob(request, rc) },
   { method: "GET", pattern: ["jobs"], bucket: "poll", handle: (rc) => listJobs(rc) },
   { method: "GET", pattern: ["jobs", ":id"], bucket: "poll", handle: (rc, _r, p) => getJob(rc, p["id"]!) },
@@ -141,11 +146,34 @@ async function dispatch(
     const { headers } = await consume(env, caller.orgId, candidate.bucket, config);
 
     const rc: RequestContext = { env, ctx, caller, requestId, rateHeaders: headers, url };
-    return candidate.handle(rc, request, params);
+    try {
+      return await candidate.handle(rc, request, params);
+    } catch (err) {
+      throw withRateHeaders(err, headers);
+    }
   }
 
   if (allowedMethod !== null) throw methodNotAllowed(request.method, allowedMethod);
   throw new ApiError(404, "not_found", `no endpoint at ${url.pathname}`);
+}
+
+/**
+ * Put the budget headers on a refusal, not only on a success.
+ *
+ * Two reasons, and the second is the one that motivated adding this. A client told 422 has
+ * spent a token and still needs to know how many are left, which is what bucket.ts means
+ * when it says these headers go on every response whether it was refused or not. And when
+ * the rate limiter has degraded to its in-isolate fallback, `X-RateLimit-Mode: degraded` is
+ * the one visible sign of it; dropping that header from exactly the responses a caller is
+ * looking at while something is wrong would make the signal useless.
+ *
+ * Headers the error chose for itself win, because they were chosen deliberately: a 429
+ * carries its own Retry-After and its own remaining count, and the ambient ones are stale
+ * by comparison.
+ */
+function withRateHeaders(err: unknown, rateHeaders: Record<string, string>): unknown {
+  if (!(err instanceof ApiError)) return err;
+  return new ApiError(err.status, err.code, err.message, err.detail, { ...rateHeaders, ...err.headers });
 }
 
 function methodNotAllowed(used: string, allowed: string): ApiError {

@@ -1,0 +1,86 @@
+name: the JSON guarantee
+
+# Two halves of one promise: every response from api.kaviri.dev is JSON.
+#
+# The first half is the Worker's own code, and it is provable in process. The second half is
+# everything Cloudflare can put in front of the Worker, and it is not provable in process at
+# all, because in that failure the Worker never runs. A WAF managed rule, Super Bot Fight
+# Mode, Browser Integrity Check, an Access policy or Under Attack mode answers first with an
+# HTML interstitial, usually carrying a 200, and a GitHub Action parsing it reports
+# "expected JSON, got <!DOCTYPE html>" with nothing in any log to debug. That is why the
+# second job talks to the deployed service over the network rather than to a fake.
+#
+# It runs on a schedule and not only on push because the thing it guards against is not a
+# commit. Somebody adds a zone-wide WAF rule on a Tuesday afternoon, having never opened
+# this repository, and the API starts answering HTML with no deploy and no diff.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/api/**'
+      - '.github/workflows/json-guarantee.yml'
+  pull_request:
+    paths:
+      - 'workers/api/**'
+      - '.github/workflows/json-guarantee.yml'
+  schedule:
+    # Every six hours. Frequent enough that a zone change is caught the same day, rare
+    # enough that the schedule is not itself traffic worth rate limiting.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  in-process:
+    name: every route answers JSON under every failure
+    # Skipped on the schedule: the code has not changed since the last push, and the half of
+    # the guarantee the schedule exists for is the edge, below.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4
+        with:
+          node-version: '22'
+      - name: Install
+        working-directory: workers/api
+        run: npm install
+      - name: Drive every route in the table through every failure it has
+        working-directory: workers/api
+        run: npx vitest run test/always-json.test.ts
+
+  edge:
+    name: the deployed service answers JSON to everybody
+    runs-on: ubuntu-latest
+
+    # API_ORIGIN is a repository variable rather than a hardcoded hostname so that a fork,
+    # or this repository before the first deploy, does not sit permanently red. A permanently
+    # red check is a check people learn to ignore, which is worse than no check. When the
+    # variable is unset the job says so plainly and passes; the moment somebody sets it, the
+    # schedule starts guarding the real thing.
+    env:
+      API_ORIGIN: ${{ vars.API_ORIGIN }}
+      DL_ORIGIN: ${{ vars.DL_ORIGIN }}
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      # Runs whether or not an origin is configured, because a check that is skipped for
+      # months is exactly the one that turns out not to parse on the day it is needed.
+      - name: The smoke script is valid bash
+        run: bash -n ./workers/api/scripts/smoke-json.sh
+
+      - name: Check the deployed origins
+        run: |
+          set -uo pipefail
+          if [ -z "${API_ORIGIN}" ]; then
+            echo "::notice::API_ORIGIN is not set, so there is no deployed service to check."
+            echo "Set the API_ORIGIN repository variable (Settings, Secrets and variables,"
+            echo "Actions, Variables) to for example https://api.kaviri.dev, and optionally"
+            echo "DL_ORIGIN to https://dl.kaviri.dev, to turn this check on."
+            exit 0
+          fi
+          ./workers/api/scripts/smoke-json.sh "${API_ORIGIN}" "${DL_ORIGIN}"

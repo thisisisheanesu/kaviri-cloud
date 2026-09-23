@@ -27,6 +27,7 @@ GitHub Action ──► api.kaviri.dev ──► submit_job ──► render_job
 | `src/shape.ts` | eight database states to six API states, and the job body |
 | `src/r2.ts` | SigV4 query signing for artifact downloads |
 | `src/routes/` | the endpoints |
+| `scripts/smoke-json.sh` | the half of the JSON guarantee that can only be checked over the network |
 
 ## The four things that keep the pages from being hammered
 
@@ -42,9 +43,22 @@ it. Revocation takes effect within `KEY_CACHE_TTL_SECONDS`, sixty by default.
 Durable Object and not KV, because a limit read and written from three colos at once has
 to serialise somewhere, and an eventually consistent limit gives a burst three full
 budgets. Submission and polling are separate buckets: a CI job polling every two seconds
-must not spend its own ability to submit the next take. If the limiter is unreachable the
-Worker fails open and logs it, because the thing behind the limiter, `submit_job`, is what
-enforces the limits that actually matter.
+must not spend its own ability to submit the next take.
+
+When the Durable Object cannot be reached the Worker neither fails open nor fails closed.
+It degrades: the isolate handling the request answers from its own memory, running the same
+token bucket arithmetic at `RATE_DEGRADED_PERCENT` of the real budget, twenty per cent by
+default, and marks those responses with `X-RateLimit-Mode: degraded`. Failing open is a
+bypass with a one line recipe, and it got worse rather than better once `BILLING_MODE=none`
+made every tenant limit null, because then there is nothing behind the limiter to catch an
+unmetered flood. Failing closed turns one Durable Object incident into a total API outage,
+including the cancel endpoint a customer would use to stop a runaway render. The degraded
+budget is not exact, since every isolate has its own, and the full reasoning along with what
+the weakened guarantee actually is sits at the top of `src/ratelimit.ts`.
+
+`X-RateLimit-Mode` appears only when the limiter is degraded, so an alert on it is a count
+rather than a ratio, and a support conversation about a surprising 429 is settled by one
+response header.
 
 **Idempotency keys.** KV first, the database second, `submit_job` third. A replayed key
 with the same script returns `200` and the original job. A replayed key with a different
@@ -61,6 +75,15 @@ count again after, because a chunked request declares nothing. Over the limit is
 
 Every response this Worker can produce goes through `jsonResponse`, including the
 catch-all in `fetch`. There is no path that returns HTML.
+
+`test/always-json.test.ts` is what makes that a fact rather than a sentence. It drives
+every entry in the exported `ROUTES` table, so a route added to `src/index.ts` is covered by
+the same commit, and it pushes each one through no credential, an unreachable database, a
+database that throws something which is not an `Error`, an upstream HTML 502, an empty 200,
+an unreachable rate limiting Durable Object, a body that is not JSON and a method the table
+does not have. Every case asserts the same three things: the content type is JSON, the body
+parses, and its first byte is `{`. The download Worker has the matching suite at
+`workers/dl/test/always-json.test.ts`.
 
 That solves half the problem. The other half is in front of the Worker, and it is the one
 that costs a day to debug when it happens.
@@ -107,14 +130,30 @@ Configure the following on the zone, for the hostname `api.kaviri.dev`:
 After a change, the check that matters:
 
 ```sh
-curl -sS -i https://api.kaviri.dev/v1/health | head -1
 curl -sS https://api.kaviri.dev/v1/health | head -c 1
 ```
 
-The second command must print `{`. If it prints `<`, one of the five above is wrong.
+It must print `{`. If it prints `<`, one of the five above is wrong.
 
-It is worth putting that exact assertion in the smoke test that runs after every deploy,
-because a WAF rule can be added by somebody who never sees this file.
+That assertion is not left to whoever remembers to run it. `scripts/smoke-json.sh` makes it
+against a deployed origin, eight times over, including once wearing a real browser's user
+agent, because a bot manager that challenges automated callers and one that challenges
+browsers fail in opposite directions and only checking both catches both. It also asserts
+`X-Kaviri-Request-Id` is present, since nothing in front of the Worker knows how to mint
+that header, so its absence on a response that otherwise looks fine means something else
+answered. On a failure it prints the status, the content type, the first two hundred bytes
+of what actually arrived, and the five settings above in the order worth checking them.
+
+```sh
+./scripts/smoke-json.sh https://api.kaviri.dev https://dl.kaviri.dev
+```
+
+`.github/workflows/json-guarantee.yml` runs it every six hours and on demand, which is the
+point: the thing it guards against is not a commit. Somebody adds a zone-wide WAF rule on a
+Tuesday afternoon without ever opening this repository, and the API starts answering HTML
+with no deploy and no diff. The workflow reads the origin from the `API_ORIGIN` repository
+variable and passes with a notice when it is unset, so a fork does not sit permanently red;
+a permanently red check is one people learn to ignore.
 
 ## What this Worker needs from the schema
 
@@ -183,7 +222,7 @@ R2_ACCOUNT_ID  R2_ACCESS_KEY_ID  R2_SECRET_ACCESS_KEY
 ```
 
 The rest is in `wrangler.toml` and is tunable without a code change:
-`RATE_SUBMIT_PER_MIN`, `RATE_POLL_PER_MIN`, `MAX_BODY_BYTES`, `MAX_SOURCE_BYTES`,
+`RATE_SUBMIT_PER_MIN`, `RATE_POLL_PER_MIN`, `RATE_DEGRADED_PERCENT`, `MAX_BODY_BYTES`, `MAX_SOURCE_BYTES`,
 `KEY_CACHE_TTL_SECONDS`, `ENTITLEMENTS_CACHE_TTL_SECONDS`,
 `IDEMPOTENCY_CACHE_TTL_SECONDS`, `SIGNED_URL_TTL_SECONDS`, `R2_BUCKET`, `R2_PUBLIC_HOST`,
 `APP_RPC_SCHEMA`, `SERVICE_VERSION`.

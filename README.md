@@ -1,6 +1,6 @@
 # kaviri-cloud
 
-The hosted half of [kaviri](https://github.com/vamboai/kaviri). You POST a script, you get
+The hosted half of [kaviri](https://github.com/thisisisheanesu/kaviri). You POST a script, you get
 an MP4.
 
 This repository holds the database, the edge Workers, the render worker and the
@@ -40,14 +40,30 @@ A null limit means unlimited, which makes the unmetered default the absence of a
 constraint rather than a very large number that some comparison will one day forget to
 special case.
 
+`extra_limits` is the one part of that table a column-name check cannot see, because its
+keys are data rather than schema, and `{"seat_price_cents": 1200}` would sit in the open
+database and pass every check written against column names. So the keys are read out of
+the applied database instead, at every depth, and held to the same word list the column
+names are held to, by `scripts/verify-seam.sh` and by `supabase/tests/seam_none.sql`. The
+test plants that key, and a nested one, and fails if the guard does not name them.
+
 **Billing reads exactly one view: `v_org_usage_month`.** Quantities and a plan label per
 org per month. It is a view rather than table access so that the shape billing depends on
 is declared here, in the open, and cannot widen by accident.
 
 ### BILLING_MODE=none
 
-The open repository builds and runs end to end with `BILLING_MODE=none`, granting every
-tenant unmetered, with no access to `kaviri-billing`. The `clean-checkout` job in
+`BILLING_MODE` is a label for a deployment, not a switch in the code. Nothing in this
+repository reads it, and it is worth saying so plainly rather than letting the name imply
+an enforcement path that does not exist. The unmetered behaviour is a property of the
+database: `create_org` seeds an `org_entitlements` row whose limit columns are all null,
+`app.effective_entitlements` treats a null limit as unlimited, and nothing but the billing
+service ever writes a real limit. Point a `BILLING_MODE=none` deployment at a database
+where limits were already written and those limits still apply, correctly, because the row
+is the truth and the variable is a note.
+
+So: the open repository builds and runs end to end with no access to `kaviri-billing`,
+and every tenant of such a deployment is unmetered. The `clean-checkout` job in
 `.github/workflows/ci.yml` proves it on every commit: a default checkout with no
 submodules and no second repository, a clean Postgres, every migration applied in order,
 and `supabase/tests/seam_none.sql` asserting that a fresh org is unmetered, that the
@@ -68,7 +84,9 @@ supabase/shim/         just enough Supabase to apply the migrations to a plain P
 supabase/tests/        the end to end proof, in SQL.
 docs/API.md            the HTTP contract. Everything codes against this document.
 docs/LIFECYCLE.md      the job state machine, leasing, reaping, retries and retention.
-scripts/check-seam.sh  the seam check, run in CI.
+scripts/check-seam.sh  the seam check against the source, run in CI.
+scripts/verify-seam.sh the seam check against the applied schema, including the jsonb
+                       keys inside extra_limits, which the source alone cannot show.
 ```
 
 ## Architecture
