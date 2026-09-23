@@ -18,8 +18,8 @@ pasting one into a file, stop: `.gitignore` covers `.env*`, but the habit is the
 | Domain | `kaviri.dev`, live on Cloudflare in that account, alongside ngano.dev |
 | Landing page | Worker `kaviri-site`, on the apex and on www |
 | Mail | Email Routing on, `hello@` forwards, everything else drops |
-| Supabase project | `dewjjmvsnojnmqhbvuxx`, region `eu-central-1`, Postgres 17.6 |
-| Supabase URL | `https://dewjjmvsnojnmqhbvuxx.supabase.co` |
+| Supabase project | `qeprgqdekauxicawefpz`, region `eu-central-1`, Postgres 17.6 |
+| Supabase URL | `https://qeprgqdekauxicawefpz.supabase.co` |
 
 The database password was generated at project creation and is in the GNOME keyring, not
 on disk. The Supabase access token is read from the same keyring by `scripts/run-sql.py`.
@@ -36,7 +36,7 @@ what CI uses, and the Supabase Management API when `SUPABASE_PROJECT_REF` is set
 what a laptop with no `psql` uses.
 
 ```
-export SUPABASE_PROJECT_REF=dewjjmvsnojnmqhbvuxx
+export SUPABASE_PROJECT_REF=qeprgqdekauxicawefpz
 ./scripts/reset.sh            # drops, applies every migration in order, seeds demo data
 ./scripts/reset.sh --no-seed  # schema only, which is what a real environment wants
 ```

@@ -5,16 +5,16 @@ behaves.
 
 | | |
 |---|---|
-| project ref | `dewjjmvsnojnmqhbvuxx` |
+| project ref | `qeprgqdekauxicawefpz` |
 | name | `kaviri` |
 | region | `eu-central-1`, matching the other Vambo projects |
 | Postgres | 17.6 |
-| API URL | `https://dewjjmvsnojnmqhbvuxx.supabase.co` |
+| API URL | `https://qeprgqdekauxicawefpz.supabase.co` |
 
 Nothing in this repository holds a credential for it. The Supabase access token comes from
 the desktop keyring where the CLI already keeps it, or from `SUPABASE_ACCESS_TOKEN`. The
 database password was generated at creation and stored in the keyring under
-`kaviri supabase db password (dewjjmvsnojnmqhbvuxx)`; it was never written to a file and is
+`kaviri supabase db password (qeprgqdekauxicawefpz)`; it was never written to a file and is
 not needed for anything here, because every script goes through the Management API or
 through `psql` with a URL you supply.
 
@@ -32,7 +32,7 @@ That split exists because the two audiences genuinely differ. CI brings up a
 neither psql nor the database password, but does have a Supabase token.
 
 ```sh
-export SUPABASE_PROJECT_REF=dewjjmvsnojnmqhbvuxx     # hosted
+export SUPABASE_PROJECT_REF=qeprgqdekauxicawefpz     # hosted
 # or
 export DATABASE_URL=postgres://postgres:postgres@localhost:54322/postgres
 ```

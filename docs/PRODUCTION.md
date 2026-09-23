@@ -24,16 +24,22 @@ and has never been green anywhere else. Look at github.com/settings/billing.
 
 ### 2. The database schema has never been proved against a real Postgres.
 
-The project `dewjjmvsnojnmqhbvuxx` does exist: its REST endpoint answers 401, which is what an
-unauthenticated request to a live project returns. What is NOT established is whether the
-eleven migrations have been applied to it, because the Supabase access token has gone: it was
-in the desktop keyring and `scripts/run-sql.py` now fails with `No such secret item at path:
-/org/freedesktop/secrets/collection/login/10`. There is no Postgres on this machine to apply
-them to locally either.
+Corrected on 23 September, because the earlier version of this file was wrong in a way worth
+recording: the project id in `DEPLOY.md` was `dewjjmvsnojnmqhbvuxx`, and that project **is not
+on this account**. It is absent from all four organisations the account can see. Its REST
+endpoint answers 401, which looked like proof the project existed, and is not: an unknown ref
+on the `supabase.co` wildcard answers 401 too. A 401 from a hostname proves a hostname.
 
-So `./scripts/reset.sh` has never been observed to succeed end to end. Two defects the audit
-found in migration `0011` are fixed in the tree, but "fixed in the tree" and "applies cleanly"
-are different claims and only one of them is true today.
+A real project now exists: **`qeprgqdekauxicawefpz`**, named kaviri, `eu-central-1`, in
+`inmisi's Org`, created through the Management API and confirmed by running
+`select current_database()` against it.
+
+The eleven migrations are still not applied. `scripts/run-sql.py` reads its access token from
+the desktop keyring, where there is no longer one (`No such secret item at path:
+/org/freedesktop/secrets/collection/login/10`), and there is no Postgres on this machine to
+apply them to locally. One `npx supabase login` puts the token back and `./scripts/reset.sh`
+can then run. Until it has, two defects the audit found in `0011` are fixed in the tree, which
+is a different claim from "applies cleanly".
 
 ### 3. Nothing is deployed.
 
