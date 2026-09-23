@@ -1,0 +1,22 @@
+{
+  "name": "@kaviri/dl",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Signed, range-capable artifact delivery out of R2.",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "exports": {
+    "./sign": "./src/sign.ts",
+    "./keys": "./src/keys.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240605.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

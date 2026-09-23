@@ -1,0 +1,38 @@
+name = "kaviri-dl"
+main = "src/index.ts"
+compatibility_date = "2026-09-23"
+account_id = "5953bfdd63a83668a47dbaf1329dee16"
+
+# There is no workers.dev URL for this service. The signed link is the product, and a
+# second hostname serving the same bucket is a second thing to remember to protect.
+workers_dev = false
+
+[observability]
+enabled = true
+
+# The download host. A custom domain rather than a route, so Cloudflare manages the
+# certificate and the DNS record together and there is no orphaned CNAME to reason about.
+[[routes]]
+pattern = "dl.kaviri.dev"
+custom_domain = true
+
+[[r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "kaviri-artifacts"
+preview_bucket_name = "kaviri-artifacts-preview"
+
+[vars]
+# How long a full object may sit in the Cloudflare cache. Kept to an hour rather than a
+# day because a cached copy survives the retention sweep that deleted the object, and an
+# hour is a short enough window to describe honestly to a customer asking why a take they
+# expected to be gone still played once.
+DL_EDGE_CACHE_SECONDS = "3600"
+# 64 MiB. Above this the object streams straight through from R2 and is not cached, so
+# one very large take cannot evict everything else or stall on a slow client while the
+# cache write tees behind it.
+DL_CACHE_MAX_BYTES = "67108864"
+
+# Secrets, set with `wrangler secret put` and never written to a file:
+#   DL_SIGNING_KEY           the current HMAC secret, shared with the api Worker
+#   DL_SIGNING_KEY_PREVIOUS  set only during a rotation, removed once the longest TTL
+#                            in circulation has passed

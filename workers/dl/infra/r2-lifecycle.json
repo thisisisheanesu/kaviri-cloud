@@ -1,0 +1,44 @@
+{
+  "rules": [
+    {
+      "id": "abort-incomplete-multipart",
+      "enabled": true,
+      "conditions": { "prefix": "" },
+      "abortMultipartUploadsTransition": {
+        "condition": { "type": "Age", "maxAge": 86400 }
+      }
+    },
+    {
+      "id": "expire-d7",
+      "enabled": true,
+      "conditions": { "prefix": "a/d7/" },
+      "deleteObjectsTransition": {
+        "condition": { "type": "Age", "maxAge": 691200 }
+      }
+    },
+    {
+      "id": "expire-d30",
+      "enabled": true,
+      "conditions": { "prefix": "a/d30/" },
+      "deleteObjectsTransition": {
+        "condition": { "type": "Age", "maxAge": 2678400 }
+      }
+    },
+    {
+      "id": "expire-d90",
+      "enabled": true,
+      "conditions": { "prefix": "a/d90/" },
+      "deleteObjectsTransition": {
+        "condition": { "type": "Age", "maxAge": 7862400 }
+      }
+    },
+    {
+      "id": "expire-d365",
+      "enabled": true,
+      "conditions": { "prefix": "a/d365/" },
+      "deleteObjectsTransition": {
+        "condition": { "type": "Age", "maxAge": 31622400 }
+      }
+    }
+  ]
+}

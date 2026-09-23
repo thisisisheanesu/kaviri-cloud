@@ -1,0 +1,6 @@
+# The build context is this directory, and the only file the image needs from it is the
+# entrypoint. Everything else here is documentation and host side scripting, and sending it
+# to the daemon would put the pins and the firewall script into a build cache layer for no
+# reason.
+*
+!entrypoint.sh

@@ -1,0 +1,35 @@
+# Static headers for the playground, in the form Cloudflare's static hosting reads.
+#
+# connect-src is the line to read before self-hosting. It pins the page to its own origin and to
+# the official API, so a copy pointed at a different API base has to add that origin here or the
+# browser will block the request and the page will report the service as unreachable.
+#
+# media-src is the download host, which is NOT the API host and NOT the R2 endpoint: the API
+# answers with a signed link on dl.kaviri.dev and the <video> element loads it directly. A copy
+# pointed at a different deployment has to change this line too, or the take renders and then
+# refuses to play with nothing in the page to say why.
+#
+# wasm-unsafe-eval is what instantiating a WebAssembly module needs. It is narrower than
+# unsafe-eval: it permits wasm compilation and nothing else, so the planner build can load
+# without opening the page up to eval of JavaScript.
+
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; font-src 'self'; media-src 'self' https://dl.kaviri.dev; connect-src 'self' https://api.kaviri.dev; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Content-Type-Options: nosniff
+  Cross-Origin-Opener-Policy: same-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
+
+# The page and the scripts change together, so neither is cached for long. Anything that turns
+# up under wasm/ is content addressed by its build and can be cached hard.
+/
+  Cache-Control: public, max-age=0, must-revalidate
+
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/js/*
+  Cache-Control: public, max-age=300
+
+/wasm/*
+  Cache-Control: public, max-age=31536000, immutable

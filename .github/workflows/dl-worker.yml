@@ -1,0 +1,64 @@
+name: dl worker
+
+# Kept in its own workflow file rather than added to ci.yml, because the jobs in ci.yml
+# defend claims about the whole repository and this one only covers workers/dl. A failure
+# here should say which service is broken from the check name alone.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/dl/**'
+      - '.github/workflows/dl-worker.yml'
+  pull_request:
+    paths:
+      - 'workers/dl/**'
+      - '.github/workflows/dl-worker.yml'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: workers/dl
+
+jobs:
+  test:
+    name: signatures, ranges and keys
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: '22'
+
+      # `npm install` rather than `npm ci`, because there is no lockfile committed yet.
+      # Swap this for `npm ci` the moment one is, so a transitive release cannot change
+      # what this job proved.
+      - run: npm install --no-audit --no-fund
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - name: The lifecycle rules parse and cover every retention class
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const doc = JSON.parse(readFileSync("infra/r2-lifecycle.json", "utf8"));
+            const prefixes = new Set(doc.rules.map((rule) => rule.conditions.prefix));
+            // Every class src/keys.ts can stamp into a key must have a rule, or an object
+            // lands in a prefix the bucket will never expire and nobody finds out until
+            // the storage line on the invoice does not go down.
+            for (const prefix of ["a/d7/", "a/d30/", "a/d90/", "a/d365/"]) {
+              if (!prefixes.has(prefix)) throw new Error(`no lifecycle rule for ${prefix}`);
+            }
+            if (prefixes.has("a/keep/")) throw new Error("a/keep/ means unlimited and must have no rule");
+            const mpu = doc.rules.find((rule) => rule.abortMultipartUploadsTransition);
+            if (!mpu) throw new Error("no rule aborts incomplete multipart uploads");
+          '
+
+      - name: The setup script is valid bash
+        run: bash -n infra/r2-setup.sh

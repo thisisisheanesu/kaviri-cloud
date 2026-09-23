@@ -1,0 +1,65 @@
+# systemd unit for the worker on a Hetzner box.
+#
+#   install to /etc/systemd/system/kaviri-render-worker.service
+#   secrets to /etc/kaviri/worker.env, mode 0600, owned by root
+#
+# The worker is not the sandbox. It starts containers, uploads files and talks to the
+# queue, and the customer's script never runs inside this process, so the hardening here is
+# about limiting the blast radius of a bug in the worker rather than about containing a
+# take. What contains a take is docker/Dockerfile and docker/egress.sh.
+
+[Unit]
+Description=kaviri render worker
+Documentation=https://github.com/vamboai/kaviri-cloud
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=kaviri
+Group=kaviri
+# Membership of the docker group is root equivalent on this box. It is granted because the
+# worker's whole job is starting containers, and it is why the box should run this and
+# nothing else.
+SupplementaryGroups=docker
+
+# Secrets are read from the environment at run time and never land in a file that ships.
+# This one is a deployment artifact, not a repository artifact: it is created by whoever
+# provisions the box, and it is the only place the worker JWT and the R2 credential exist.
+EnvironmentFile=/etc/kaviri/worker.env
+
+ExecStartPre=/usr/local/bin/kaviri-render-worker doctor
+ExecStart=/usr/local/bin/kaviri-render-worker
+
+# A take can run for the job budget, and the worker drains rather than killing on SIGTERM,
+# so the stop timeout has to be longer than one take or a deploy costs every customer whose
+# job is in flight a retry.
+KillSignal=SIGTERM
+TimeoutStopSec=2400
+
+Restart=always
+RestartSec=5
+
+# Hardening. None of this constrains a customer's script, which runs in a container of its
+# own, but a worker that cannot write outside its own state directory is a worker whose
+# worst bug is still local.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+StateDirectory=kaviri
+ReadWritePaths=/var/lib/kaviri
+
+# The frame spool is the box's busiest writer by a wide margin. If the render disk is a
+# separate volume, add it here and point KAVIRI_WORK_ROOT at it.
+# ReadWritePaths=/mnt/render
+
+[Install]
+WantedBy=multi-user.target

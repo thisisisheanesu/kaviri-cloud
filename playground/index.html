@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>kaviri playground</title>
+    <meta
+      name="description"
+      content="Edit a kaviri script and watch the real zoom planner cut the camera, in the browser, with nothing installed."
+    />
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23c7361a'/%3E%3Ccircle cx='16' cy='16' r='6.5' fill='none' stroke='%23fff' stroke-width='2.5'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-in">
+        <a class="wordmark" href="https://kaviri.dev">
+          <span class="dot" aria-hidden="true"></span>
+          kaviri
+        </a>
+        <span class="crumb">playground</span>
+        <span id="planner-badge" class="badge" title="Which planner this page is running">
+          planner: loading
+        </span>
+        <nav class="topbar-links">
+          <a href="https://kaviri.dev/docs">Docs</a>
+          <a href="https://github.com/thisisisheanesu/kaviri">Recorder</a>
+          <button id="theme-toggle" type="button" class="ghost sm" aria-label="Switch theme">
+            Theme
+          </button>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="intro">
+        <h1>Your camera path, before you install anything.</h1>
+        <p class="lede">
+          Write a script on the left. The zoom planner from the recorder runs on it here in the
+          page and cuts the camera, and the canvas plays the result back over a fixture page.
+          Nothing is uploaded and no account is involved.
+        </p>
+        <details class="honest">
+          <summary>What this is and is not</summary>
+          <div class="honest-body">
+            <p>
+              <strong>The recorder cannot run in a browser tab.</strong> It drives headless
+              Chromium over the DevTools protocol and shells out to ffmpeg, and a page can do
+              neither. Anyone telling you otherwise is selling a mock.
+            </p>
+            <p>
+              <strong>The planner can.</strong> Turning interaction marks into a zoom timeline is
+              pure arithmetic, so that part is the real thing: same constants, same merge window,
+              same left bias, same waypoint thinning. The badge at the top says whether you are
+              running the recorder crate compiled to wasm or the JavaScript port of it.
+            </p>
+            <p>
+              <strong>The page you see is a fixture, not your site.</strong> A tab cannot measure
+              elements on someone else's page. The fixture has honest geometry, so the framing is
+              computed from real boxes, but it is a made-up shop and every word in it is
+              invented.
+            </p>
+            <p>
+              <strong>The clock is modelled, not measured.</strong> Every pause comes from the
+              recorder's own source except two that depend on a page this playground does not
+              have: how long a navigation takes and how long a selector takes to appear. Those are
+              estimates, drawn faded on the timeline.
+            </p>
+            <p>
+              <strong>Playback is sharper than a render.</strong> The fixture is drawn as vectors
+              through the crop, so a zoom here has no pixels to run out of. A real take crops into
+              captured frames, and how far it can go before it softens is what
+              <code>--scale</code> buys.
+            </p>
+            <p>
+              For a real MP4 of a real page, run the recorder locally, or paste an API key below
+              and send this script to the hosted service.
+            </p>
+          </div>
+        </details>
+      </section>
+
+      <section id="selftest" class="selftest" hidden>
+        <h2>Self test</h2>
+        <p class="hint">
+          The assertions from the recorder's own test modules, re-run against the planner this
+          page loaded.
+        </p>
+        <ul id="selftest-results"></ul>
+      </section>
+
+      <div class="workbench">
+        <section class="pane pane-editor">
+          <div class="pane-head">
+            <h2>Script</h2>
+            <label class="field inline">
+              <span class="visually-hidden">Example</span>
+              <select id="examples"></select>
+            </label>
+          </div>
+          <p id="example-about" class="hint"></p>
+          <div class="editor">
+            <div id="gutter" class="gutter" aria-hidden="true"></div>
+            <textarea
+              id="script"
+              spellcheck="false"
+              autocomplete="off"
+              autocapitalize="off"
+              wrap="off"
+              aria-label="Newline-delimited JSON ops"
+            ></textarea>
+          </div>
+          <div id="diagnostics" class="diagnostics"></div>
+          <details class="ref">
+            <summary>Ops and selectors on the fixture</summary>
+            <div class="ref-body">
+              <pre><code>{"op":"navigate","url":"https://…"}
+{"op":"click","selector":"css"}   {"op":"click","x":400,"y":300}
+{"op":"type","selector":"css","text":"…","typewriter_ms":18}
+{"op":"scroll","y":600,"smooth":true}
+{"op":"wait","ms":800}   {"op":"wait","selector":"css","timeout_ms":20000}
+{"op":"mark","label":"checkout"}</code></pre>
+              <p class="hint">Selectors the fixture answers to:</p>
+              <p id="selector-list" class="chips"></p>
+            </div>
+          </details>
+        </section>
+
+        <section class="pane pane-stage">
+          <div class="pane-head">
+            <h2>Take</h2>
+            <div class="stage-controls">
+              <label class="field inline">
+                <span>Preset</span>
+                <select id="preset"></select>
+              </label>
+              <label class="field inline">
+                <span>Backdrop</span>
+                <select id="background"></select>
+              </label>
+              <label class="field inline">
+                <span>Cursor</span>
+                <input id="cursor-scale" type="range" min="0" max="4" step="0.25" value="1.75" />
+              </label>
+            </div>
+          </div>
+
+          <div class="stage-wrap">
+            <canvas id="stage" aria-label="The rendered take"></canvas>
+            <div id="stage-empty" class="stage-empty" hidden></div>
+          </div>
+
+          <div class="transport">
+            <button id="play" type="button" class="primary">Play</button>
+            <button id="step-back" type="button" class="ghost sm" title="One frame back">&#8249;</button>
+            <button id="step-fwd" type="button" class="ghost sm" title="One frame on">&#8250;</button>
+            <input id="scrub" type="range" min="0" max="1" step="0.001" value="0" aria-label="Scrub" />
+            <output id="time" class="mono">0.00 / 0.00s</output>
+            <label class="field inline">
+              <span class="visually-hidden">Speed</span>
+              <select id="speed">
+                <option value="0.25">0.25x</option>
+                <option value="0.5">0.5x</option>
+                <option value="1" selected>1x</option>
+                <option value="2">2x</option>
+              </select>
+            </label>
+            <label class="check"><input id="loop" type="checkbox" checked /> Loop</label>
+          </div>
+
+          <div class="readouts">
+            <div class="overview">
+              <h3>Viewport and crop</h3>
+              <canvas id="overview" aria-label="The whole viewport with the crop rectangle"></canvas>
+            </div>
+            <dl id="readout" class="readout"></dl>
+          </div>
+        </section>
+      </div>
+
+      <section class="pane pane-timeline">
+        <div class="pane-head">
+          <h2>Timeline</h2>
+          <p class="hint">Ops on top, zoom events under them, the zoom curve below that.</p>
+        </div>
+        <canvas id="timeline" aria-label="The take's timeline"></canvas>
+        <div id="planner-warnings" class="warnings"></div>
+      </section>
+
+      <section class="pane pane-api">
+        <div class="pane-head">
+          <h2>Render it for real</h2>
+        </div>
+        <p class="hint">
+          Send this exact script to the hosted service and get an MP4 of a real page in a real
+          browser. Your key is held in this tab, sent only to the API base below on the
+          <code>Authorization</code> header, and never put in a URL. The recorder itself stays
+          free for local and self-hosted use with no account at all.
+        </p>
+        <div class="api-grid">
+          <label class="field">
+            <span>API key</span>
+            <input
+              id="api-key"
+              type="password"
+              placeholder="kv_xxxxxxxx_…"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </label>
+          <label class="field">
+            <span>Project</span>
+            <input id="api-project" type="text" value="playground" spellcheck="false" />
+          </label>
+          <label class="field">
+            <span>API base</span>
+            <input id="api-base" type="text" spellcheck="false" />
+          </label>
+        </div>
+        <div class="api-actions">
+          <button id="api-send" type="button" class="primary">Submit take</button>
+          <button id="api-cancel" type="button" class="ghost" hidden>Cancel</button>
+          <button id="api-usage-btn" type="button" class="ghost">Check usage</button>
+          <label class="check">
+            <input id="api-remember" type="checkbox" />
+            Keep the key for this tab only
+          </label>
+          <button id="api-forget" type="button" class="ghost sm">Forget key</button>
+        </div>
+        <div id="api-status" class="api-status" hidden></div>
+        <div id="api-result" class="api-result" hidden></div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p>
+        The recorder is Apache 2.0 and always will be. This page is part of
+        <code>kaviri-cloud</code>, which is FSL 1.1. Nothing on this page knows what anything
+        costs.
+      </p>
+    </footer>
+
+    <script type="module" src="./js/main.js"></script>
+  </body>
+</html>

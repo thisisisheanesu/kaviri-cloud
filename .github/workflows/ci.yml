@@ -1,0 +1,149 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  seam:
+    name: the seam holds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - run: ./scripts/check-seam.sh
+
+  clean-checkout:
+    name: BILLING_MODE=none, no private repo
+    runs-on: ubuntu-latest
+
+    # The claim this job defends: the open repository builds and runs end to end with no
+    # billing service and no access to kaviri-billing, granting every tenant unmetered.
+    # A claim like that rots within a month unless something runs it on every commit.
+    #
+    # The checkout below is deliberately the default one: no submodules, no extra token,
+    # no second repository. If the open service ever starts needing the private one, this
+    # job is where it stops being true.
+    env:
+      BILLING_MODE: none
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+      # scripts/run-sql.py picks the psql route when this is set, which is the route this
+      # job wants. Without it the scripts would look for a hosted project and a token that
+      # correctly does not exist in CI.
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          submodules: false
+
+      - name: Assert the private repository is absent
+        run: |
+          set -euo pipefail
+          if [ -e ../kaviri-billing ] || [ -e ./kaviri-billing ]; then
+            echo "kaviri-billing is present in this checkout; this job proves nothing." >&2
+            exit 1
+          fi
+          test "${BILLING_MODE}" = none
+
+      - name: Install psql
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - name: Apply the shim, then every migration in order
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -q -f supabase/shim/0000_supabase_shim.sql
+          for f in supabase/migrations/*.sql; do
+            echo "applying $f"
+            psql -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+
+      - name: End to end, unmetered
+        run: psql -v ON_ERROR_STOP=1 -f supabase/tests/seam_none.sql
+
+      - name: Seed the demo data
+        # Run before the checks below so that they are exercised against a database with
+        # content in it. An isolation test on an empty database is the easiest kind to
+        # pass and the least worth running.
+        run: psql -v ON_ERROR_STOP=1 -f supabase/seed.sql
+
+      - name: Tenant isolation, including the negative control
+        # This does not only assert that the policies hold. It also plants a widened policy
+        # and requires the test to fail against it, which is what stops a test that has
+        # quietly stopped asserting from reading as a pass.
+        run: ./scripts/test-isolation.sh
+
+      - name: The seam holds in the applied schema
+        # Stronger than grepping information_schema for a billing schema: this also refuses
+        # a money column, function or enum label anywhere in the open schemas, checks that
+        # org_entitlements holds nothing but limits and that v_org_usage_month exposes
+        # nothing but quantities, and proves a fresh org is unmetered under BILLING_MODE=none.
+        run: ./scripts/verify-seam.sh
+
+      - name: Rebuilding from nothing works
+        # The reset path is how every contributor will recover a drifted database, so it is
+        # worth knowing it still applies every migration to an already-populated one.
+        run: ./scripts/reset.sh
+
+  api-worker:
+    name: the api Worker typechecks and its tests pass
+    runs-on: ubuntu-latest
+    # The api Worker imports workers/dl/src/sign.ts directly, so that the URL it mints and
+    # the URL the download Worker verifies cannot drift apart again. That import is why
+    # this job checks out the whole repository rather than one directory, and why its
+    # typecheck covers a file that also belongs to another package.
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4
+        with:
+          node-version: '22'
+      - name: Install
+        working-directory: workers/api
+        run: npm install
+      - name: Typecheck
+        working-directory: workers/api
+        run: npx tsc --noEmit
+      - name: Test
+        working-directory: workers/api
+        run: npx vitest run
+
+  render-worker:
+    name: the render worker builds, lints and its tests pass
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - name: Toolchain
+        run: rustup component add clippy rustfmt
+      - name: Format
+        working-directory: render-worker
+        run: cargo fmt --check
+      - name: Clippy
+        # Denying warnings here rather than reading them later, because the fleet is the
+        # component that runs customer scripts and the one nobody watches day to day.
+        working-directory: render-worker
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        working-directory: render-worker
+        run: cargo test

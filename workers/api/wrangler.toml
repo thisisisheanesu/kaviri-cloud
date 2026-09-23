@@ -1,0 +1,92 @@
+name = "kaviri-api"
+main = "src/index.ts"
+# Named explicitly because this token can see two accounts, and wrangler refuses to guess
+# in a non-interactive shell, which is every deploy that matters.
+account_id = "5953bfdd63a83668a47dbaf1329dee16"
+compatibility_date = "2026-09-01"
+# nodejs_compat is on for the Web Crypto and TextEncoder surface the JWT minter and the
+# link signer use. Nothing here imports a Node builtin.
+compatibility_flags = ["nodejs_compat"]
+
+# The Action talks to exactly one hostname, and it is the one the WAF rules in README.md
+# are written against. A second hostname would be a second set of rules nobody remembers
+# to keep in step.
+routes = [
+  { pattern = "api.kaviri.dev", custom_domain = true }
+]
+
+[observability]
+enabled = true
+
+# ---------------------------------------------------------------------------
+# Bindings
+# ---------------------------------------------------------------------------
+
+# Resolved API keys, org entitlements and idempotency records. Every one of these exists
+# so that a poll loop in CI does not turn into a query against Postgres, which is the
+# thing the owner asked for by name: the pages must not be hammered.
+[[kv_namespaces]]
+binding = "CACHE"
+id = "replace-with-the-real-namespace-id"
+preview_id = "replace-with-the-preview-namespace-id"
+
+# Per-org token buckets. A Durable Object rather than KV because a rate limit read and
+# written by two colos at once has to serialise somewhere, and KV is eventually
+# consistent, which means a burst arriving in three regions gets three full budgets.
+[[durable_objects.bindings]]
+name = "RATE_LIMIT"
+class_name = "TokenBucket"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TokenBucket"]
+
+# The nudge to the fleet. The database is still the queue: lease_next_job is what hands
+# out work, and a lost message costs latency rather than a lost take, because the poller
+# finds the row anyway.
+[[queues.producers]]
+binding = "RENDER_QUEUE"
+queue = "kaviri-renders"
+
+[vars]
+SERVICE_VERSION = "0.1.0"
+
+# The schema the two functions this Worker calls are reachable under.
+#
+# "public", not "app". The app schema is deliberately not exposed to PostgREST, because
+# app.is_org_member(uuid) reachable over HTTP would let any signed-in caller ask the
+# database about an org they have nothing to do with. Migration 0011 therefore puts two
+# named wrappers in public, and this stays "public" unless those are removed.
+APP_RPC_SCHEMA = "public"
+
+# Per org, per minute. Submission and polling have separate budgets because a CI job that
+# polls every two seconds must not spend its own ability to submit.
+RATE_SUBMIT_PER_MIN = "60"
+RATE_POLL_PER_MIN = "600"
+
+# A generous script is a few hundred ops of a few hundred bytes. A megabyte is well past
+# that and still small enough that rejecting it costs nothing.
+MAX_BODY_BYTES = "1048576"
+MAX_SOURCE_BYTES = "4096"
+
+# How long a verified key stays resolved in KV. Short enough that a revocation takes
+# effect while the person who revoked it is still looking at the screen.
+KEY_CACHE_TTL_SECONDS = "60"
+ENTITLEMENTS_CACHE_TTL_SECONDS = "60"
+IDEMPOTENCY_CACHE_TTL_SECONDS = "86400"
+
+# Five minutes, as docs/API.md promises. Long enough for a slow runner to start the
+# download, short enough that a URL pasted into a chat has stopped working by the time
+# anybody clicks it.
+SIGNED_URL_TTL_SECONDS = "300"
+
+# Where artifact links point. This Worker mints a path-signed URL for the dl Worker and
+# holds no R2 credential of its own: the download never passes through here, and an S3
+# key on this path would be a credential on the busiest authenticated route in the system.
+DL_ORIGIN = "https://dl.kaviri.dev"
+
+# Secrets, set with `wrangler secret put` and never written to a file:
+#   SUPABASE_URL
+#   SUPABASE_ANON_KEY
+#   SUPABASE_JWT_SECRET
+#   DL_SIGNING_KEY   the same byte for byte in the dl Worker, or every link 403s
