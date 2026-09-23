@@ -14,8 +14,10 @@ pasting one into a file, stop: `.gitignore` covers `.env*`, but the habit is the
 
 | | |
 |---|---|
-| Cloudflare account | `5953bfdd63a83668a47dbaf1329dee16` (Ishe@vambo.ai's Account) |
-| Domain | `kaviri.dev`, live on Cloudflare in that account |
+| Cloudflare account | `67cb2eb6080019612e374af596f7197c` (the personal account) |
+| Domain | `kaviri.dev`, live on Cloudflare in that account, alongside ngano.dev |
+| Landing page | Worker `kaviri-site`, on the apex and on www |
+| Mail | Email Routing on, `hello@` forwards, everything else drops |
 | Supabase project | `dewjjmvsnojnmqhbvuxx`, region `eu-central-1`, Postgres 17.6 |
 | Supabase URL | `https://dewjjmvsnojnmqhbvuxx.supabase.co` |
 
@@ -84,7 +86,7 @@ fails on an assertion that has nothing to do with what broke. Run it after
 The bucket and its lifecycle rules, from `workers/dl/infra/`:
 
 ```
-export CLOUDFLARE_ACCOUNT_ID=5953bfdd63a83668a47dbaf1329dee16
+export CLOUDFLARE_ACCOUNT_ID=67cb2eb6080019612e374af596f7197c
 export CLOUDFLARE_API_TOKEN=...      # needs Workers R2 Storage:Edit
 bash workers/dl/infra/r2-setup.sh
 ```

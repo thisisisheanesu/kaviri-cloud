@@ -18,7 +18,7 @@
 set -euo pipefail
 
 BUCKET="${R2_BUCKET:-kaviri-artifacts}"
-ACCOUNT="${CLOUDFLARE_ACCOUNT_ID:-5953bfdd63a83668a47dbaf1329dee16}"
+ACCOUNT="${CLOUDFLARE_ACCOUNT_ID:-67cb2eb6080019612e374af596f7197c}"
 # Western Europe, to sit next to the Supabase project in eu-central-1. A location hint and
 # not a jurisdiction: a jurisdiction is fixed at creation, changes the S3 endpoint and
 # makes every later wrangler call need a flag, and nothing here has a data residency

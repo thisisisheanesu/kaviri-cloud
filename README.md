@@ -4,7 +4,7 @@ The hosted half of [kaviri](https://github.com/thisisisheanesu/kaviri). You POST
 an MP4.
 
 This repository holds the database, the edge Workers, the render worker and the
-playground. It is licensed FSL 1.1, which converts to Apache 2.0 on schedule. It contains
+playground. It is Apache 2.0, the same as the recorder. It contains
 no billing logic and no prices, and there is a CI job that keeps that true.
 
 The recorder itself stays Apache 2.0, unconditional, and free forever for local and self
@@ -16,7 +16,7 @@ convenience on top: a queue, storage, a URL you can link, and concurrency.
 | repository | licence | what is in it |
 |---|---|---|
 | `kaviri` | Apache 2.0 | the recorder, the GitHub Action, the wasm planner |
-| `kaviri-cloud` | FSL 1.1 | this repo: Supabase, Workers, the render worker, the playground |
+| `kaviri-cloud` | Apache 2.0 | this repo: Supabase, Workers, the render worker, the playground |
 | `kaviri-billing` | proprietary, private | Stripe, plans, invoicing, admin |
 
 ## The seam
@@ -172,5 +172,15 @@ land in a file.
 
 ## Licence
 
-FSL 1.1 with an Apache 2.0 future licence. Add the canonical text from fsl.software as
-`LICENSE` before this repository goes public.
+Apache 2.0, the same as the recorder.
+
+This was FSL 1.1 in an earlier plan, and the argument for FSL is real: under Apache anyone
+may run this exact service against their own Supabase and sell it. The decision went the
+other way because the distribution is worth more than the fence. A permissive licence is what
+makes this repository something Supabase can point at, and what separates their hosted kaviri
+from yours is the trademark, the operations and `kaviri-billing`, which is closed and stays
+closed.
+
+If that trade looks wrong on reflection, this is the cheapest moment to reverse it: the
+repository is still private, and reversing after it is public reverses nothing for anyone who
+already has a copy.

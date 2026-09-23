@@ -284,7 +284,7 @@ Post it as the first comment, not in the URL field. The URL is the GitHub repo.
 > version for people who would rather not run a browser, but it is not live and there is no
 > price, so there is nothing to sign up for.
 >
-> kaviri is Shona for "twice, a second time", ka-VEE-ree.
+> kaviri is ChiShona for "twice, a second time", ka-VEE-ree.
 
 That is the honest engineering story and it is long for HN, deliberately. The audience that
 matters reads to the end and the ones who do not were never going to comment.
@@ -402,7 +402,7 @@ into anything. Spending a relationship on a story that does not convert also spe
 next pitch to the same outlet is weaker.
 
 Hold it for the story that is actually there, which is **not the tool**. It is the studio,
-the Shona name, a developer tooling product built from Zimbabwe and adopted by companies
+the ChiShona name, a developer tooling product built from Zimbabwe and adopted by companies
 abroad. That story is much stronger with a Supabase feature and some adoption in it than it
 is on launch day with a repo and no users. Six months out, not now.
 
@@ -533,7 +533,7 @@ because a long answer to a hostile question reads as a wound.
 
 ### "Nobody can pronounce kaviri"
 
-**Answer:** "ka-VEE-ree. It is Shona for twice, a second time, which is what a re-recording
+**Answer:** "ka-VEE-ree. It is ChiShona for twice, a second time, which is what a re-recording
 is." Then stop typing.
 
 Do not defend it further. Do not explain the naming process. Do not offer to consider a

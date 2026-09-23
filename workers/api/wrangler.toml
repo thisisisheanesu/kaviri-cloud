@@ -2,7 +2,7 @@ name = "kaviri-api"
 main = "src/index.ts"
 # Named explicitly because this token can see two accounts, and wrangler refuses to guess
 # in a non-interactive shell, which is every deploy that matters.
-account_id = "5953bfdd63a83668a47dbaf1329dee16"
+account_id = "67cb2eb6080019612e374af596f7197c"
 compatibility_date = "2026-09-01"
 # nodejs_compat is on for the Web Crypto and TextEncoder surface the JWT minter and the
 # link signer use. Nothing here imports a Node builtin.
