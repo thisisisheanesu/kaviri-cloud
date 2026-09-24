@@ -32,6 +32,13 @@ Two ways out, and the second one is free:
    is nothing to bill and nothing to lock. The launch plan makes `kaviri` public anyway, so
    this is a sequencing choice rather than extra work.
 
+**Worked around in the meantime.** `scripts/ci.sh` in both repositories runs what the workflow
+runs, and `scripts/install-hooks.sh` wires it to a pre-push hook, so nothing reaches main
+without passing. It is installed and it has already blocked one push. What it cannot do is
+prove a clean checkout on another machine, and in this repository it cannot run the database
+half at all, because that needs a Postgres to apply every migration to from scratch and there
+is none here. The script prints that skip rather than passing quietly.
+
 This is first because it invalidates every other check. The test suite is green on this laptop
 and has never been green anywhere else.
 
@@ -59,6 +66,19 @@ It would have been found by the first account closure or the first deletion requ
 GDPR, which is the worst possible place to find it. The guard now distinguishes the cascade
 from a stray delete by whether the parent org still exists, which it does not during a cascade
 and does in every other case.
+
+### 2b. GitHub is connected to Supabase.
+
+The Supabase GitHub App is installed on `thisisisheanesu`, scoped to `kaviri-cloud` alone
+rather than all repositories, with deploy-to-production on and the production branch set to
+`main`. Migrations now apply on every push.
+
+One thing had to happen first, and it is the kind of thing that breaks the first sync: the
+twelve migrations were applied by hand, so `supabase_migrations.schema_migrations` was empty
+and the first sync would have tried to run all twelve again and failed on the first
+`create table`. They are recorded as applied, which is what `supabase migration repair` does.
+The next push carried `0012` and was the live test: nothing was re-applied, and the schema is
+still 9 tables and 11 public functions.
 
 ### 3. Nothing is deployed.
 
