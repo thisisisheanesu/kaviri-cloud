@@ -24,7 +24,16 @@ pub struct Config {
     pub poll_idle: Duration,
 
     // Object storage.
-    pub r2_account_id: String,
+    /// The S3 endpoint objects are written to.
+    ///
+    /// R2 by default, because zero egress is worth a vendor for a product whose artifacts are
+    /// MP4s hotlinked from READMEs. Overridable because it does not have to be R2: any
+    /// S3-compatible endpoint works, and Supabase Storage in particular has one, which is what
+    /// makes a zero-cost deployment possible without a second account. See docs/FREE.md.
+    pub s3_endpoint: String,
+    /// SigV4 needs a region in the signature. R2 ignores it and wants `auto`; Supabase and
+    /// real S3 do not, so it is configurable alongside the endpoint.
+    pub s3_region: String,
     pub r2_bucket: String,
     pub r2_access_key_id: String,
     pub r2_secret_access_key: String,
@@ -78,7 +87,17 @@ impl Config {
             heartbeat: Duration::from_secs(num("KAVIRI_HEARTBEAT_SECONDS", 15, 5, 120)?),
             poll_idle: Duration::from_millis(num("KAVIRI_POLL_IDLE_MS", 2000, 200, 60_000)?),
 
-            r2_account_id: req("R2_ACCOUNT_ID")?,
+            /*
+             * An explicit endpoint means R2_ACCOUNT_ID is meaningless, so it is not required.
+             * A deployment on Supabase Storage should not have to invent a Cloudflare account
+             * id to satisfy a check.
+             */
+            s3_endpoint: match opt("KAVIRI_S3_ENDPOINT") {
+                Some(e) => e.trim_end_matches('/').to_string(),
+                None => format!("https://{}.r2.cloudflarestorage.com", req("R2_ACCOUNT_ID")?),
+            },
+            s3_region: opt("KAVIRI_S3_REGION")
+                .unwrap_or_else(|| crate::storage::DEFAULT_REGION.to_string()),
             r2_bucket: req("R2_BUCKET")?,
             r2_access_key_id: req("R2_ACCESS_KEY_ID")?,
             r2_secret_access_key: req("R2_SECRET_ACCESS_KEY")?,

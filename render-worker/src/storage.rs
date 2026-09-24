@@ -19,14 +19,17 @@ use tokio::io::AsyncReadExt;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// R2 is region-less, and its SigV4 implementation expects this literal in the credential
-/// scope. It is not a placeholder for a real region.
-const REGION: &str = "auto";
+/// R2 is region-less and its SigV4 implementation expects this literal in the credential
+/// scope. It is not a placeholder for a real region, which is why it is the default rather
+/// than something derived. Any other S3-compatible endpoint, Supabase Storage included, wants
+/// its own region and sets KAVIRI_S3_REGION.
+pub const DEFAULT_REGION: &str = "auto";
 const SERVICE: &str = "s3";
 
 pub struct Storage {
     http: reqwest::Client,
     endpoint: String,
+    region: String,
     bucket: String,
     access_key_id: String,
     secret_access_key: String,
@@ -51,7 +54,8 @@ impl Storage {
             .map_err(|e| format!("cannot build an HTTP client: {e}"))?;
         Ok(Storage {
             http,
-            endpoint: format!("https://{}.r2.cloudflarestorage.com", cfg.r2_account_id),
+            endpoint: cfg.s3_endpoint.clone(),
+            region: cfg.s3_region.clone(),
             bucket: cfg.r2_bucket.clone(),
             access_key_id: cfg.r2_access_key_id.clone(),
             secret_access_key: cfg.r2_secret_access_key.clone(),
@@ -148,13 +152,13 @@ impl Storage {
         let canonical_request =
             format!("PUT\n{canonical_uri}\n\n{canonical_headers}\n{signed_headers}\n{sha256_hex}");
 
-        let scope = format!("{date_stamp}/{REGION}/{SERVICE}/aws4_request");
+        let scope = format!("{date_stamp}/{}/{SERVICE}/aws4_request", self.region);
         let string_to_sign = format!(
             "AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}",
             hex::encode(Sha256::digest(canonical_request.as_bytes()))
         );
         let signature = hex::encode(sign(
-            &signing_key(&self.secret_access_key, &date_stamp),
+            &signing_key(&self.secret_access_key, &date_stamp, &self.region),
             string_to_sign.as_bytes(),
         ));
         let authorization = format!(
@@ -224,9 +228,9 @@ fn sign(key: &[u8], msg: &[u8]) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 
-fn signing_key(secret: &str, date_stamp: &str) -> Vec<u8> {
+fn signing_key(secret: &str, date_stamp: &str, region: &str) -> Vec<u8> {
     let k_date = sign(format!("AWS4{secret}").as_bytes(), date_stamp.as_bytes());
-    let k_region = sign(&k_date, REGION.as_bytes());
+    let k_region = sign(&k_date, region.as_bytes());
     let k_service = sign(&k_region, SERVICE.as_bytes());
     sign(&k_service, b"aws4_request")
 }
