@@ -52,19 +52,43 @@ def access_token():
             "No SUPABASE_ACCESS_TOKEN in the environment and no keyring available.\n"
             "Either export the token or set DATABASE_URL and use psql."
         )
-    items = Secret.password_search_sync(
-        None,
-        {},
-        Secret.SearchFlags.ALL | Secret.SearchFlags.UNLOCK | Secret.SearchFlags.LOAD_SECRETS,
-        None,
+    """
+    Looked up by attributes, never enumerated.
+
+    `password_search_sync` walks the whole keyring, and one dangling item takes the entire
+    search down with `No such secret item at path: .../login/10` before the token that IS
+    there is ever reached. This machine has such an item, and so the search route failed
+    while the Supabase CLI itself was perfectly happy: the CLI asks for exactly the entry it
+    wrote. This does the same.
+
+    The attribute pair is the one zalando/go-keyring writes, which is what the CLI uses:
+    service is the keyring "service" name, which for the CLI is the human label, and
+    username is the account within it.
+    """
+    schema = Secret.Schema.new(
+        "org.freedesktop.Secret.Generic",
+        Secret.SchemaFlags.NONE,
+        {
+            "service": Secret.SchemaAttributeType.STRING,
+            "username": Secret.SchemaAttributeType.STRING,
+        },
     )
-    # Matched on the Supabase CLI's own item rather than on the word "supabase", because
-    # other kaviri secrets live in the same keyring and a loose match returns the wrong
-    # one, which surfaces much later and confusingly as an undecodable JWT.
-    for i in items:
-        if (i.get_label() or "") == "keyring:supabase@Supabase CLI":
-            return i.retrieve_secret_sync(None).get_text()
-    sys.exit("No Supabase CLI token in the keyring. Run `supabase login` once.")
+    for attrs in (
+        {"service": "Supabase CLI", "username": "supabase"},
+        {"service": "supabase", "username": "Supabase CLI"},
+    ):
+        try:
+            value = Secret.password_lookup_sync(schema, attrs, None)
+        except Exception:
+            continue
+        # A Supabase access token is `sbp_` and then hex. Checking it here turns a
+        # wrong-item match into a clear message rather than a 401 several steps later.
+        if value and value.startswith("sbp_"):
+            return value
+    sys.exit(
+        "No Supabase CLI token in the keyring. Run `supabase login` once, "
+        "or export SUPABASE_ACCESS_TOKEN."
+    )
 
 
 def run_api(ref, sql, token, timeout=600):

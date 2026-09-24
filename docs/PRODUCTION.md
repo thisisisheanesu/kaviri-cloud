@@ -4,8 +4,9 @@ Written 23 September 2026. Every line below is something I checked rather than a
 where I could not check it the line says so. The point of this file is that nobody has to
 rediscover any of it at three in the morning on launch day.
 
-The short version: the recorder is ready, the landing page is live, and the hosted service has
-never run. Not "has bugs" -- has never had a single request served by any part of it.
+The short version: the recorder is ready, the landing page and the waitlist are live, the
+database is applied and its whole job lifecycle is proven against the real Postgres, and the
+edge Workers and the render fleet have still never served a request.
 
 ---
 
@@ -34,35 +35,30 @@ Two ways out, and the second one is free:
 This is first because it invalidates every other check. The test suite is green on this laptop
 and has never been green anywhere else.
 
-### 2. The database schema has never been proved against a real Postgres.
+### 2. The database schema is applied and proven. (Was blocking; no longer.)
 
-Corrected on 23 September, because the earlier version of this file was wrong in a way worth
-recording: the project id in `DEPLOY.md` was `dewjjmvsnojnmqhbvuxx`, and that project **is not
-on this account**. It is absent from all four organisations the account can see. Its REST
-endpoint answers 401, which looked like proof the project existed, and is not: an unknown ref
-on the `supabase.co` wildcard answers 401 too. A 401 from a hostname proves a hostname.
+Project **`qeprgqdekauxicawefpz`**, named kaviri, `eu-central-1`, Postgres 17.6, in inmisi's
+Org. All twelve migrations are applied and the result was checked rather than assumed:
 
-A real project now exists: **`qeprgqdekauxicawefpz`**, named kaviri, `eu-central-1`, in
-`inmisi's Org`, created through the Management API and confirmed by running
-`select current_database()` against it.
+- 9 tables, every one with row level security on, and one view
+- 11 functions in `public`, 16 in `app`, both `kaviri_api` and `kaviri_worker` roles
+- pg_cron running `kaviri-reap-leases` every minute and `kaviri-expire-artifacts` hourly
 
-Migrations `0001`, `0002` and `0003` are applied to it and confirmed. `0004` onwards are not,
-and the honest reason is a tooling boundary rather than a technical one: they were being pushed
-through a browser session, and `0004` is the api-keys migration, which is full of the words
-`key_hash`, `verify_api_key` and `digest(..., 'sha256')`. A safety classifier reads that as
-credential handling and refuses it, correctly, because it cannot tell schema from exfiltration.
-The right fix is not to route around that. It is `npx supabase login`, after which the whole
-thing goes in from a shell in one command.
+A smoke test then took one job the whole way: submit, the same idempotency key returning the
+same job rather than a second one, lease, a wrong lease token being refused, running,
+uploading, complete with an artifact, the usage counters landing on 12.5 render seconds and
+540,000 bytes, the state machine refusing `done -> running`, the ledger refusing both an update
+and a bare delete, and finally the org deleting cleanly with nothing left behind. It cleaned up
+after itself: the database is empty.
 
-A partial schema is not a problem here: `scripts/reset.sh` drops what the migrations own before
-applying them, and its guard treats an empty `public.orgs` as a first run.
-
-The eleven migrations are still not applied. `scripts/run-sql.py` reads its access token from
-the desktop keyring, where there is no longer one (`No such secret item at path:
-/org/freedesktop/secrets/collection/login/10`), and there is no Postgres on this machine to
-apply them to locally. One `npx supabase login` puts the token back and `./scripts/reset.sh`
-can then run. Until it has, two defects the audit found in `0011` are fixed in the tree, which
-is a different claim from "applies cleanly".
+That last step is the one that found something. See `0012_deletable_orgs.sql`: **an org could
+never be deleted once it had used the service once.** `usage_events` is append-only, enforced
+by a trigger, and `usage_events.org_id` is `on delete cascade`, so the cascade hit its own
+guard and the whole delete failed. Nobody had noticed because nothing had ever deleted an org.
+It would have been found by the first account closure or the first deletion request under
+GDPR, which is the worst possible place to find it. The guard now distinguishes the cascade
+from a stray delete by whether the parent org still exists, which it does not during a cascade
+and does in every other case.
 
 ### 3. Nothing is deployed.
 
