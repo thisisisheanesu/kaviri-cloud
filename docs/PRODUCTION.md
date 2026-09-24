@@ -12,35 +12,32 @@ edge Workers and the render fleet have still never served a request.
 
 ## Blocking, in the order they block each other
 
-### 1. CI has never run. Not once. The cause is now known.
+### 1. CI runs, and it is green. (Was blocking; no longer.)
 
-Every push to `thisisisheanesu/kaviri` is `startup_failure` with zero jobs created. The REST
-API does not say why; the Actions tab does, in one line:
+Fixed on 24 September. The account was locked because it had no payment method, and adding one
+took two attempts: the first card was rejected with "Invalid payment method - authorization
+hold failed", which is a bank declining the pre-authorisation rather than anything about
+GitHub. Making the repositories public did NOT help, and it is worth recording why, because it
+sounds like it should: the lock is on the account, not the repository, so free minutes for
+public repos do not escape it.
 
-> GitHub Actions workflows can't be executed on this repository. Your account's billing is
-> currently locked. Please update your payment information.
+First green runs, all on 24 September:
 
-And `github.com/settings/billing/payment_information` says "You have not added a payment
-method." There is $0.22 of metered usage this month from the ngano repository, $0 of it billed,
-so this is not exhausted minutes: it is an account with a balance and no card, which locks
-billing, which blocks Actions on every private repository.
+| | | |
+|---|---|---|
+| `kaviri` | ci | 1m06 |
+| `kaviri` | demo, which films the example on the runner | 2m07 |
+| `kaviri-cloud` | ci, all four jobs | 54s |
 
-Two ways out, and the second one is free:
+The fourth of those settles the question this document had open. The database job runs a real
+Postgres container and its steps are "Apply the shim, then every migration in order", "End to
+end, unmetered", "Seed the demo data", "Tenant isolation, including the negative control",
+"The seam holds in the applied schema" and "Rebuilding from nothing works". All success. So
+the twelve migrations do apply cleanly to an empty database in order, which until now was only
+true of a database they had been applied to by hand, one at a time.
 
-1. Add a payment method. Nothing here will actually cost anything at this volume.
-2. **Make the repository public.** Standard runners are free for public repositories, so there
-   is nothing to bill and nothing to lock. The launch plan makes `kaviri` public anyway, so
-   this is a sequencing choice rather than extra work.
-
-**Worked around in the meantime.** `scripts/ci.sh` in both repositories runs what the workflow
-runs, and `scripts/install-hooks.sh` wires it to a pre-push hook, so nothing reaches main
-without passing. It is installed and it has already blocked one push. What it cannot do is
-prove a clean checkout on another machine, and in this repository it cannot run the database
-half at all, because that needs a Postgres to apply every migration to from scratch and there
-is none here. The script prints that skip rather than passing quietly.
-
-This is first because it invalidates every other check. The test suite is green on this laptop
-and has never been green anywhere else.
+`scripts/ci.sh` and its pre-push hook stay. They are now a fast local check rather than a
+substitute, and they cost nothing.
 
 ### 2. The database schema is applied and proven. (Was blocking; no longer.)
 
